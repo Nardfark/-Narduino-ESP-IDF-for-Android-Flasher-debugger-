@@ -1,0 +1,929 @@
+cat << 'INSTALL_EOF' > install_coupons.sh
+#!/bin/bash
+
+# ==================================================================================
+# 🎄 Jennifer's Upgraded Christmas Coupon Server (v3) 🎄
+# ==================================================================================
+# Features:
+# - Random Non-Sequential IDs
+# - Subtle Christmas Styling
+# - QR Code Printing (Business Card Layout 2x5)
+# - Systemd Service
+# ==================================================================================
+
+APP_DIR="$HOME/christmas_coupons"
+PORT=6969
+USER=$(whoami)
+
+echo "🎅 Ho Ho Ho! Starting installation..."
+
+# --- 1. PRE-FLIGHT CHECKS ---
+if ss -tuln | grep -q ":$PORT "; then
+    echo "⚠️  WARNING: Port $PORT seems to be in use."
+    read -p "Do you want to try and kill the process on port $PORT? (y/N) " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        PID=$(lsof -t -i:$PORT)
+        if [ -n "$PID" ]; then
+            kill -9 $PID
+            echo "✅ Process killed."
+        else
+            echo "❌ Could not find process. Exiting."
+            exit 1
+        fi
+    else
+        echo "❌ Exiting. Please free port $PORT."
+        exit 1
+    fi
+fi
+
+# Backup existing installation
+if [ -d "$APP_DIR" ]; then
+    BACKUP="${APP_DIR}_backup_$(date +%s)"
+    echo "📦 Backing up existing directory to $BACKUP..."
+    mv "$APP_DIR" "$BACKUP"
+fi
+
+mkdir -p "$APP_DIR"
+cd "$APP_DIR"
+
+echo "📂 Created directory at $APP_DIR"
+
+# --- 2. GENERATE FILES ---
+
+# 2.1 DATABASE GENERATOR (Python script to generate random IDs)
+cat <<EOF > generate_db.py
+import json
+import random
+import string
+
+items = [
+    "Back Scratching (5m)", "Back Scratching (5m)",
+    "Foot Rub (15m)", "Foot Rub (15m)",
+    "Tech Free Hour", "Watch Movie (No Work)",
+    "Do Dishes (All Day)", "Vacuum & Mop",
+    "Do Laundry (All Day)", "Grocery Shopping",
+    "Organize A Room", "Pay For Gas (Tank)",
+    "Spa Day (Baby Watch)", "Diaper Duty (All Day)",
+    "24hr Mom Break", "Sleep In",
+    "Personal Chauffeur", "One 'Yes' Day",
+    "Back Massage (30m)", "Back Scratching (10m)",
+    "Trip to Lake", "Go on a Hike",
+    "Wildcard #1", "Wildcard #2"
+]
+
+def generate_id():
+    # Format: XXXX-XXXX (e.g. A9B2-K8L1)
+    chars = string.ascii_uppercase + string.digits
+    p1 = ''.join(random.choices(chars, k=4))
+    p2 = ''.join(random.choices(chars, k=4))
+    return f"{p1}-{p2}"
+
+db = {
+    "definitions": {},
+    "redeemed": {}
+}
+
+used_ids = set()
+
+for item in items:
+    while True:
+        new_id = generate_id()
+        if new_id not in used_ids:
+            used_ids.add(new_id)
+            db["definitions"][new_id] = item
+            break
+
+with open('coupons.json', 'w') as f:
+    json.dump(db, f, indent=2)
+
+print(f"Generated {len(items)} coupons with random IDs.")
+EOF
+
+# Run the generator
+python3 generate_db.py
+rm generate_db.py
+
+# 2.2 SERVER (server.py)
+cat <<EOF > server.py
+import http.server
+import socketserver
+import json
+import os
+import urllib.parse
+from datetime import datetime
+
+PORT = $PORT
+DB_FILE = 'coupons.json'
+
+class ThreadingSimpleServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    pass
+
+class CouponHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        # Serve API Data
+        if self.path == '/api/data':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            try:
+                with open(DB_FILE, 'r') as f:
+                    self.wfile.write(f.read().encode())
+            except Exception as e:
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+            return
+
+        # Rewrite root to redeem.html
+        if self.path == '/' or self.path.startswith('/?'):
+            self.path = '/redeem.html'
+
+        return http.server.SimpleHTTPRequestHandler.do_GET(self)
+
+    def do_POST(self):
+        # API: Redeem Coupon
+        if self.path == '/api/redeem':
+            try:
+                length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(length)
+                data = json.loads(post_data.decode())
+                code = data.get('code')
+
+                with open(DB_FILE, 'r+') as f:
+                    db = json.load(f)
+
+                    if code in db['definitions']:
+                        if code in db['redeemed']:
+                            self.send_response(409) # Conflict
+                            self.end_headers()
+                            response = {
+                                "status": "error",
+                                "message": "Already redeemed",
+                                "date": db['redeemed'][code],
+                                "item": db['definitions'][code]
+                            }
+                        else:
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            db['redeemed'][code] = timestamp
+                            f.seek(0)
+                            json.dump(db, f, indent=2)
+                            f.truncate()
+
+                            self.send_response(200)
+                            self.end_headers()
+                            response = {
+                                "status": "success",
+                                "message": "Redeemed successfully",
+                                "date": timestamp,
+                                "item": db['definitions'][code]
+                            }
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                        response = {"status": "error", "message": "Invalid Code"}
+
+                self.wfile.write(json.dumps(response).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
+            return
+
+print(f"Starting Christmas Coupon Server on port {PORT}...")
+socketserver.TCPServer.allow_reuse_address = True
+with ThreadingSimpleServer(("", PORT), CouponHandler) as httpd:
+    httpd.serve_forever()
+EOF
+
+# 2.3 FRONTEND (redeem.html) - Subtle Colors
+cat <<EOF > redeem.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jennifer's Christmas Coupons</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Subtle Christmas Palette */
+    --primary: #5d001e; /* Deep Burgundy */
+    --secondary: #2f4f4f; /* Dark Slate Green */
+    --accent: #d4af37; /* Muted Gold */
+    --bg: #fdfbf7; /* Cream */
+    --text: #333;
+    --card-bg: #fff;
+    --card-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Lato', sans-serif;
+    background-color: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 20px;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* Elegant Header */
+  header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding-top: 20px;
+  }
+
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 3rem;
+    color: var(--primary);
+    margin-bottom: 10px;
+    letter-spacing: 1px;
+  }
+
+  p.subtitle {
+    color: var(--secondary);
+    font-style: italic;
+    font-size: 1.1rem;
+  }
+
+  /* Stats Bar */
+  .stats-bar {
+    max-width: 600px;
+    margin: 0 auto 40px auto;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 15px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: var(--card-shadow);
+    color: var(--secondary);
+    font-family: 'Playfair Display', serif;
+  }
+
+  .stats-val { font-weight: bold; color: var(--primary); margin-left: 5px; }
+
+  /* Grid */
+  .container {
+    max-width: 1000px;
+    margin: 0 auto;
+    position: relative;
+    z-index: 1;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 25px;
+  }
+
+  /* Card Design */
+  .card {
+    background: var(--card-bg);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    box-shadow: var(--card-shadow);
+    border: 1px solid #f0f0f0;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+  }
+
+  .card.redeemed {
+    opacity: 0.6;
+    background: #fafafa;
+  }
+
+  .card-top {
+    height: 6px;
+    background: linear-gradient(90deg, var(--primary) 0%, var(--primary) 40%, var(--accent) 40%, var(--accent) 60%, var(--secondary) 60%, var(--secondary) 100%);
+  }
+
+  .card-body {
+    padding: 25px;
+    text-align: center;
+    position: relative;
+  }
+
+  /* Decorative corner */
+  .card-body::after {
+      content: '❄';
+      position: absolute;
+      top: 10px;
+      right: 15px;
+      color: #eee;
+      font-size: 1.5rem;
+  }
+
+  .card-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 5px;
+    font-family: 'Playfair Display', serif;
+    color: var(--text);
+  }
+
+  .card-code {
+    font-size: 0.75rem;
+    color: #999;
+    letter-spacing: 1px;
+    margin-bottom: 20px;
+    font-family: monospace;
+  }
+
+  .btn {
+    display: inline-block;
+    background: transparent;
+    color: var(--primary);
+    padding: 8px 25px;
+    border: 1px solid var(--primary);
+    border-radius: 2px;
+    text-decoration: none;
+    font-weight: bold;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .btn:hover { background: var(--primary); color: white; }
+
+  .btn.disabled {
+    border-color: #ccc;
+    color: #999;
+    cursor: default;
+    background: transparent;
+  }
+  .btn.disabled:hover { background: transparent; color: #999; }
+
+  .stamp {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-15deg);
+    border: 3px double var(--primary);
+    color: var(--primary);
+    font-size: 1.4rem;
+    font-family: 'Courier New', Courier, monospace;
+    font-weight: bold;
+    padding: 5px 15px;
+    text-transform: uppercase;
+    pointer-events: none;
+    background: rgba(255,255,255,0.8);
+  }
+
+  footer {
+      text-align: center;
+      margin-top: 50px;
+      font-size: 0.9rem;
+  }
+  footer a { color: var(--secondary); text-decoration: none; border-bottom: 1px dotted var(--secondary); }
+
+  /* Modal */
+  .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(93, 0, 30, 0.4); /* Primary with opacity */
+      backdrop-filter: blur(2px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+  }
+  .modal {
+      background: white;
+      padding: 40px;
+      border-radius: 4px;
+      max-width: 450px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+      border-top: 4px solid var(--accent);
+  }
+  .modal h2 { margin-bottom: 15px; color: var(--primary); font-family: 'Playfair Display', serif; }
+  .modal-icon { font-size: 3rem; margin-bottom: 15px; display: block; }
+  .modal-close { margin-top: 25px; background: var(--secondary); color: white; border: none; }
+  .modal-close:hover { background: #1a3030; }
+
+  .loading { color: #888; text-align: center; font-style: italic; margin-top: 50px; }
+
+  @media (max-width: 600px) {
+      h1 { font-size: 2.2rem; }
+      .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Christmas Coupons</h1>
+    <p class="subtitle">A special gift, from me to you.</p>
+  </header>
+
+  <div class="stats-bar">
+    <span>Available <span id="count-avail" class="stats-val">0</span></span>
+    <span>Redeemed <span id="count-used" class="stats-val">0</span></span>
+  </div>
+
+  <div id="grid" class="grid">
+    <div class="loading">Loading coupons...</div>
+  </div>
+
+  <footer>
+    <a href="/print.html" target="_blank" class="btn">🖨️ Print Coupons</a>
+  </footer>
+</div>
+
+<!-- Modal -->
+<div id="modal" class="modal-overlay">
+    <div class="modal">
+        <span id="modal-icon" class="modal-icon">🎁</span>
+        <h2 id="modal-title">Redeemed!</h2>
+        <p id="modal-msg">Enjoy your gift.</p>
+        <div id="modal-date" style="font-size:0.8rem; color:#666; margin-top:5px;"></div>
+        <button class="btn modal-close" onclick="closeModal()">Close</button>
+    </div>
+</div>
+
+<script>
+    let definitions = {};
+    let redeemed = {};
+
+    async function loadData() {
+        try {
+            const res = await fetch('/api/data');
+            const data = await res.json();
+            definitions = data.definitions;
+            redeemed = data.redeemed;
+            render();
+            updateStats();
+        } catch (e) {
+            console.error(e);
+            document.getElementById('grid').innerHTML = '<div class="loading">Error loading coupons :(</div>';
+        }
+    }
+
+    function updateStats() {
+        const total = Object.keys(definitions).length;
+        const used = Object.keys(redeemed).length;
+        document.getElementById('count-avail').innerText = total - used;
+        document.getElementById('count-used').innerText = used;
+    }
+
+    function render() {
+        const grid = document.getElementById('grid');
+        grid.innerHTML = '';
+
+        const items = Object.entries(definitions).map(([id, name]) => {
+            return { id, name, date: redeemed[id] };
+        });
+
+        items.sort((a, b) => {
+            if (a.date && !b.date) return 1;
+            if (!a.date && b.date) return -1;
+            return 0;
+        });
+
+        items.forEach(item => {
+            const isRedeemed = !!item.date;
+            const card = document.createElement('div');
+            card.className = \`card \${isRedeemed ? 'redeemed' : ''}\`;
+
+            const btnHtml = isRedeemed
+                ? \`<div class="btn disabled">REDEEMED</div>\`
+                : \`<button class="btn" onclick="confirmRedeem('\${item.id}')">REDEEM</button>\`;
+
+            const stampHtml = isRedeemed
+                ? \`<div class="stamp">USED</div>\`
+                : '';
+
+            card.innerHTML = \`
+                <div class="card-top"></div>
+                <div class="card-body">
+                    <div class="card-title">\${item.name}</div>
+                    <div class="card-code">\${item.id}</div>
+                    \${stampHtml}
+                    \${btnHtml}
+                </div>
+            \`;
+            grid.appendChild(card);
+        });
+    }
+
+    async function confirmRedeem(code) {
+        if(!confirm("Are you sure you want to redeem '" + definitions[code] + "'?")) return;
+        doRedeem(code);
+    }
+
+    async function doRedeem(code) {
+        try {
+            const res = await fetch('/api/redeem', {
+                method: 'POST',
+                body: JSON.stringify({ code })
+            });
+            const result = await res.json();
+
+            if (res.status === 200) {
+                showModal('success', 'Enjoy!', \`You redeemed: \${result.item}\`, result.date);
+            } else if (res.status === 409) {
+                showModal('error', 'Already Used', \`\${result.item} was used on:\`, result.date);
+            } else {
+                showModal('error', 'Error', result.message);
+            }
+            loadData();
+        } catch (e) {
+            showModal('error', 'Connection Error', 'Could not reach server.');
+        }
+    }
+
+    async function checkUrl() {
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('code');
+        if (code && definitions[code]) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+            await doRedeem(code);
+        }
+    }
+
+    function showModal(type, title, msg, date='') {
+        const modal = document.getElementById('modal');
+        const icon = document.getElementById('modal-icon');
+        const h2 = document.getElementById('modal-title');
+        const p = document.getElementById('modal-msg');
+        const d = document.getElementById('modal-date');
+
+        icon.innerText = type === 'success' ? '✨' : '⚠️';
+        h2.innerText = title;
+        p.innerText = msg;
+        d.innerText = date;
+
+        modal.style.display = 'flex';
+    }
+
+    function closeModal() {
+        document.getElementById('modal').style.display = 'none';
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+        await loadData();
+        checkUrl();
+    });
+</script>
+</body>
+</html>
+EOF
+
+# 2.4 QR PRINT PAGE (print.html)
+cat <<EOF > print.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Print Coupons</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400&display=swap" rel="stylesheet">
+<style>
+    /* Reset & Page Setup */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: 'Lato', sans-serif;
+        background: #eee;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* Screen Styles */
+    .screen-only {
+        text-align: center;
+        padding: 20px;
+    }
+    h1 { font-family: 'Playfair Display', serif; color: #5d001e; margin-bottom: 10px; }
+    .print-btn {
+        background: #5d001e; color: white; border: none; padding: 10px 20px;
+        font-size: 1rem; cursor: pointer; border-radius: 4px;
+        font-family: 'Lato', sans-serif;
+    }
+    .print-btn:hover { background: #7a0026; }
+
+    /* Print Layout: 8.5" x 11" with 2x5 Grid */
+    @page {
+        size: letter;
+        margin: 0.5in; /* Standard margins */
+    }
+
+    .page-container {
+        width: 7.5in; /* 8.5 - 2*0.5 */
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: repeat(2, 3.5in); /* 2 cols of 3.5in */
+        grid-auto-rows: 2in; /* Rows of 2in */
+        gap: 0; /* Business cards usually abut or have tiny gap. Using 0 for standard templates */
+        justify-content: center;
+    }
+
+    .coupon {
+        width: 3.5in;
+        height: 2in;
+        border: 1px dashed #ccc; /* Light dash for cutting guide */
+        padding: 10px;
+        display: flex;
+        align-items: center;
+        background: white;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .coupon-info {
+        flex: 1;
+        padding-right: 10px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        height: 100%;
+    }
+
+    .coupon-title {
+        font-size: 14pt;
+        font-family: 'Playfair Display', serif;
+        font-weight: bold;
+        color: #5d001e;
+        line-height: 1.2;
+        margin-bottom: 5px;
+    }
+
+    .coupon-code {
+        font-family: monospace;
+        font-size: 10pt;
+        color: #555;
+        background: #f5f5f5;
+        padding: 2px 6px;
+        border-radius: 4px;
+        align-self: flex-start;
+    }
+
+    .coupon-qr {
+        width: 90px;
+        height: 90px;
+        flex-shrink: 0;
+    }
+    .coupon-qr img {
+        width: 100%;
+        height: 100%;
+        display: block;
+    }
+
+    .decoration {
+        position: absolute;
+        top: -10px; right: -10px;
+        font-size: 3rem; color: rgba(212, 175, 55, 0.1); /* Gold watermark */
+        pointer-events: none;
+    }
+
+    @media print {
+        body { background: white; }
+        .screen-only { display: none; }
+        .page-container { margin: 0; }
+        .coupon { border: 1px solid #eee; } /* Lighter border for print */
+    }
+</style>
+</head>
+<body>
+
+<div class="screen-only">
+    <h1>Printable Coupons</h1>
+    <p style="margin-bottom:15px">Layout designed for Standard Business Cards (2" x 3.5") on Letter Paper (8.5" x 11").</p>
+    <button class="print-btn" onclick="window.print()">🖨️ Print Now</button>
+</div>
+
+<div id="list" class="page-container">Loading...</div>
+
+<script>
+    async function load() {
+        const res = await fetch('/api/data');
+        const data = await res.json();
+        const defs = data.definitions;
+        const list = document.getElementById('list');
+        list.innerHTML = '';
+
+        // Base URL for QR Codes
+        const baseUrl = window.location.protocol + '//' + window.location.host + '/redeem.html?code=';
+
+        Object.entries(defs).forEach(([code, name]) => {
+            const url = baseUrl + code;
+            // QR Code size optimized for ~1 inch
+            const qrSrc = \`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=\${encodeURIComponent(url)}\`;
+
+            const div = document.createElement('div');
+            div.className = 'coupon';
+            div.innerHTML = \`
+                <div class="decoration">❄</div>
+                <div class="coupon-info">
+                    <div class="coupon-title">\${name}</div>
+                    <div class="coupon-code">\${code}</div>
+                </div>
+                <div class="coupon-qr">
+                    <img src="\${qrSrc}" alt="QR Code" />
+                </div>
+            \`;
+            list.appendChild(div);
+        });
+    }
+    load();
+</script>
+</body>
+</html>
+EOF
+
+# 2.5 CLI TOOL (coupons)
+cat <<EOF > coupons
+#!/usr/bin/env python3
+import json
+import sys
+import os
+import argparse
+from datetime import datetime
+
+# Assuming the script is run from the app directory or relative to it
+APP_DIR = "$APP_DIR"
+DB_FILE = os.path.join(APP_DIR, "coupons.json")
+
+# Colors
+RED = '\033[91m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+BOLD = '\033[1m'
+RESET = '\033[0m'
+
+def load_db():
+    if not os.path.exists(DB_FILE):
+        print(f"{RED}Error: Database not found at {DB_FILE}{RESET}")
+        sys.exit(1)
+    with open(DB_FILE, 'r') as f:
+        return json.load(f)
+
+def save_db(data):
+    with open(DB_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def print_header():
+    print(f"\n{BOLD}{RED}🎄 CHRISTMAS COUPON MANAGER 🎄{RESET}")
+    print(f"{YELLOW}{'-'*60}{RESET}")
+
+def cmd_list(args):
+    data = load_db()
+    defs = data['definitions']
+    redeemed = data['redeemed']
+
+    print(f"{BOLD}{'CODE':<15} | {'STATUS':<10} | {'OFFER'}{RESET}")
+    print("-" * 60)
+
+    for code, name in defs.items():
+        if code in redeemed:
+            status = f"{RED}USED{RESET}"
+            line_color = "\033[90m" # Dark Gray
+        else:
+            status = f"{GREEN}OPEN{RESET}"
+            line_color = RESET
+
+        print(f"{line_color}{code:<15}{RESET} | {status}       | {line_color}{name}{RESET}")
+    print("-" * 60)
+    print(f"Total: {len(defs)} | Available: {len(defs) - len(redeemed)} | Redeemed: {len(redeemed)}")
+
+def cmd_details(args):
+    data = load_db()
+    redeemed = data['redeemed']
+
+    if not redeemed:
+        print("No coupons have been redeemed yet.")
+        return
+
+    print(f"{BOLD}{'CODE':<15} | {'DATE':<20} | {'OFFER'}{RESET}")
+    print("-" * 60)
+    for code, date in redeemed.items():
+        name = data['definitions'].get(code, "Unknown")
+        print(f"{code:<15} | {date:<20} | {name}")
+
+def cmd_redeem(args):
+    data = load_db()
+    code = args.code
+
+    if code not in data['definitions']:
+        print(f"{RED}Error: Invalid coupon code '{code}'{RESET}")
+        return
+
+    if code in data['redeemed']:
+        print(f"{YELLOW}Coupon '{code}' was already redeemed on {data['redeemed'][code]}{RESET}")
+        return
+
+    # Redeem
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    data['redeemed'][code] = timestamp
+    save_db(data)
+    print(f"{GREEN}Success! Redeemed: {data['definitions'][code]}{RESET}")
+    print(f"Timestamp: {timestamp}")
+
+def cmd_reset(args):
+    if input(f"{RED}Are you sure you want to RESET all coupons? (y/N): {RESET}").lower() != 'y':
+        print("Aborted.")
+        return
+
+    data = load_db()
+    data['redeemed'] = {}
+    save_db(data)
+    print(f"{GREEN}All coupons have been reset to AVAILABLE.{RESET}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Manage Christmas Coupons")
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    subparsers.add_parser("list", help="List all coupons and status")
+    subparsers.add_parser("details", help="Show details of redeemed coupons")
+
+    p_redeem = subparsers.add_parser("redeem", help="Manually redeem a coupon")
+    p_redeem.add_argument("code", help="Coupon Code (e.g., JEN-XMAS-001)")
+
+    subparsers.add_parser("reset", help="Reset all coupons to available")
+
+    args = parser.parse_args()
+
+    print_header()
+    if args.command == "list":
+        cmd_list(args)
+    elif args.command == "details":
+        cmd_details(args)
+    elif args.command == "redeem":
+        cmd_redeem(args)
+    elif args.command == "reset":
+        cmd_reset(args)
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()
+EOF
+chmod +x coupons
+
+# --- 3. CREATE SYSTEMD SERVICE ---
+echo "⚙️  Configuring Systemd..."
+sudo cat <<EOF > /etc/systemd/system/coupon_server.service
+[Unit]
+Description=Christmas Coupon Server
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$APP_DIR
+ExecStart=/usr/bin/python3 $APP_DIR/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# --- 4. FINALIZE ---
+echo "🔄 Reloading Systemd..."
+sudo systemctl daemon-reload
+echo "🚀 Starting Service..."
+sudo systemctl enable coupon_server
+sudo systemctl restart coupon_server
+
+# Bash Alias
+if ! grep -q "alias coupons=" "$HOME/.bashrc"; then
+    echo "alias coupons='$APP_DIR/coupons'" >> "$HOME/.bashrc"
+    echo "✨ Added alias 'coupons' to .bashrc"
+fi
+
+# Get IP
+IP=$(hostname -I | awk '{print $1}')
+
+echo ""
+echo "=================================================================================="
+echo "🎁 INSTALLATION COMPLETE!"
+echo "=================================================================================="
+echo ""
+echo "🌐 Access the App here:"
+echo "   http://$IP:$PORT"
+echo ""
+echo "🖨️  Print Coupons & QR Codes:"
+echo "   http://$IP:$PORT/print.html"
+echo ""
+echo "📱 CLI Commands (Type 'coupons'):"
+echo "   coupons list      -> Show all coupons"
+echo "   coupons redeem ID -> Redeem manually"
+echo "   coupons reset     -> Reset all"
+echo ""
+echo "Merry Christmas! 🎄"
+INSTALL_EOF
+chmod +x install_coupons.sh
+./install_coupons.sh
