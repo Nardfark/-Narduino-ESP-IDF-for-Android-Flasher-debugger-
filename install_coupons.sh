@@ -441,7 +441,7 @@ cat <<EOF > redeem.html
   </div>
 
   <footer>
-    <a href="/print.html" target="_blank">🖨️ View Printable QR Codes</a>
+    <a href="/print.html" target="_blank" class="btn">🖨️ Print Coupons</a>
   </footer>
 </div>
 
@@ -593,55 +593,119 @@ cat <<EOF > print.html
 <title>Print Coupons</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400&display=swap" rel="stylesheet">
 <style>
-    body { font-family: 'Lato', sans-serif; background: #eee; padding: 20px; -webkit-print-color-adjust: exact; }
-    h1 { text-align: center; font-family: 'Playfair Display', serif; color: #5d001e; }
-    .no-print { text-align: center; margin-bottom: 20px; }
+    /* Reset & Page Setup */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: 'Lato', sans-serif;
+        background: #eee;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
 
-    .grid {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr); /* 2 per row for printing */
-        gap: 30px;
-        max-width: 800px;
+    /* Screen Styles */
+    .screen-only {
+        text-align: center;
+        padding: 20px;
+    }
+    h1 { font-family: 'Playfair Display', serif; color: #5d001e; margin-bottom: 10px; }
+    .print-btn {
+        background: #5d001e; color: white; border: none; padding: 10px 20px;
+        font-size: 1rem; cursor: pointer; border-radius: 4px;
+        font-family: 'Lato', sans-serif;
+    }
+    .print-btn:hover { background: #7a0026; }
+
+    /* Print Layout: 8.5" x 11" with 2x5 Grid */
+    @page {
+        size: letter;
+        margin: 0.5in; /* Standard margins */
+    }
+
+    .page-container {
+        width: 7.5in; /* 8.5 - 2*0.5 */
         margin: 0 auto;
+        display: grid;
+        grid-template-columns: repeat(2, 3.5in); /* 2 cols of 3.5in */
+        grid-auto-rows: 2in; /* Rows of 2in */
+        gap: 0; /* Business cards usually abut or have tiny gap. Using 0 for standard templates */
+        justify-content: center;
     }
 
     .coupon {
-        background: white;
-        border: 2px dashed #d4af37; /* Gold Dash */
-        padding: 20px;
+        width: 3.5in;
+        height: 2in;
+        border: 1px dashed #ccc; /* Light dash for cutting guide */
+        padding: 10px;
         display: flex;
         align-items: center;
-        page-break-inside: avoid;
+        background: white;
         position: relative;
+        overflow: hidden;
     }
 
-    .coupon-info { flex: 1; padding-right: 20px; }
-    .coupon-title { font-size: 1.5rem; font-family: 'Playfair Display', serif; font-weight: bold; margin-bottom: 5px; color: #5d001e; }
-    .coupon-code { font-family: monospace; color: #555; background: #f9f9f9; padding: 2px 5px; border-radius: 3px; display: inline-block; margin-top: 5px; }
-    .coupon-qr img { width: 100px; height: 100px; display: block; }
+    .coupon-info {
+        flex: 1;
+        padding-right: 10px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        height: 100%;
+    }
 
-    .watermark {
+    .coupon-title {
+        font-size: 14pt;
+        font-family: 'Playfair Display', serif;
+        font-weight: bold;
+        color: #5d001e;
+        line-height: 1.2;
+        margin-bottom: 5px;
+    }
+
+    .coupon-code {
+        font-family: monospace;
+        font-size: 10pt;
+        color: #555;
+        background: #f5f5f5;
+        padding: 2px 6px;
+        border-radius: 4px;
+        align-self: flex-start;
+    }
+
+    .coupon-qr {
+        width: 90px;
+        height: 90px;
+        flex-shrink: 0;
+    }
+    .coupon-qr img {
+        width: 100%;
+        height: 100%;
+        display: block;
+    }
+
+    .decoration {
         position: absolute;
-        bottom: 5px; right: 5px;
-        font-size: 0.7rem; color: #ccc;
+        top: -10px; right: -10px;
+        font-size: 3rem; color: rgba(212, 175, 55, 0.1); /* Gold watermark */
+        pointer-events: none;
     }
 
     @media print {
-        body { background: white; padding: 0; }
-        .no-print { display: none; }
-        .grid { width: 100%; max-width: 100%; gap: 15px; grid-template-columns: 1fr 1fr; }
-        .coupon { border-color: #aaa; }
+        body { background: white; }
+        .screen-only { display: none; }
+        .page-container { margin: 0; }
+        .coupon { border: 1px solid #eee; } /* Lighter border for print */
     }
 </style>
 </head>
 <body>
 
-<div class="no-print">
+<div class="screen-only">
     <h1>Printable Coupons</h1>
-    <p>Use your browser's Print function (Ctrl+P) to print these out.</p>
+    <p style="margin-bottom:15px">Layout designed for Standard Business Cards (2" x 3.5") on Letter Paper (8.5" x 11").</p>
+    <button class="print-btn" onclick="window.print()">🖨️ Print Now</button>
 </div>
 
-<div id="list" class="grid">Loading...</div>
+<div id="list" class="page-container">Loading...</div>
 
 <script>
     async function load() {
@@ -651,17 +715,18 @@ cat <<EOF > print.html
         const list = document.getElementById('list');
         list.innerHTML = '';
 
-        // Base URL for QR Codes (assumes same host)
+        // Base URL for QR Codes
         const baseUrl = window.location.protocol + '//' + window.location.host + '/redeem.html?code=';
 
         Object.entries(defs).forEach(([code, name]) => {
             const url = baseUrl + code;
-            // Using a reliable public QR API
+            // QR Code size optimized for ~1 inch
             const qrSrc = \`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=\${encodeURIComponent(url)}\`;
 
             const div = document.createElement('div');
             div.className = 'coupon';
             div.innerHTML = \`
+                <div class="decoration">❄</div>
                 <div class="coupon-info">
                     <div class="coupon-title">\${name}</div>
                     <div class="coupon-code">\${code}</div>
