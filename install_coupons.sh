@@ -1,10 +1,14 @@
 #!/bin/bash
 
 # ==================================================================================
-# 🎄 Jennifer's Upgraded Christmas Coupon Server 🎄
+# 🎄 Jennifer's Upgraded Christmas Coupon Server (v2) 🎄
 # ==================================================================================
 # This script installs a standalone Python web server and CLI for managing coupons.
-# It sets up a systemd service to keep it running in the background.
+# Features:
+# - Random Non-Sequential IDs
+# - Subtle Christmas Styling
+# - QR Code Printing
+# - Systemd Service
 #
 # USAGE: Just run this script!
 # ==================================================================================
@@ -48,38 +52,58 @@ echo "📂 Created directory at $APP_DIR"
 
 # --- 2. GENERATE FILES ---
 
-# 2.1 DATABASE (coupons.json)
-cat <<EOF > coupons.json
-{
-  "definitions": {
-    "JEN-XMAS-001": "Back Scratching (5m)",
-    "JEN-XMAS-002": "Back Scratching (5m)",
-    "JEN-XMAS-003": "Foot Rub (15m)",
-    "JEN-XMAS-004": "Foot Rub (15m)",
-    "JEN-XMAS-005": "Tech Free Hour",
-    "JEN-XMAS-006": "Watch Movie (No Work)",
-    "JEN-XMAS-007": "Do Dishes (All Day)",
-    "JEN-XMAS-008": "Vacuum & Mop",
-    "JEN-XMAS-009": "Do Laundry (All Day)",
-    "JEN-XMAS-010": "Grocery Shopping",
-    "JEN-XMAS-011": "Organize A Room",
-    "JEN-XMAS-012": "Pay For Gas (Tank)",
-    "JEN-XMAS-013": "Spa Day (Baby Watch)",
-    "JEN-XMAS-014": "Diaper Duty (All Day)",
-    "JEN-XMAS-015": "24hr Mom Break",
-    "JEN-XMAS-016": "Sleep In",
-    "JEN-XMAS-017": "Personal Chauffeur",
-    "JEN-XMAS-018": "One 'Yes' Day",
-    "JEN-XMAS-019": "Back Massage (30m)",
-    "JEN-XMAS-020": "Back Scratching (10m)",
-    "JEN-XMAS-021": "Trip to Lake",
-    "JEN-XMAS-022": "Go on a Hike",
-    "JEN-XMAS-023": "Wildcard #1",
-    "JEN-XMAS-024": "Wildcard #2"
-  },
-  "redeemed": {}
+# 2.1 DATABASE GENERATOR (Python script to generate random IDs)
+cat <<EOF > generate_db.py
+import json
+import random
+import string
+
+items = [
+    "Back Scratching (5m)", "Back Scratching (5m)",
+    "Foot Rub (15m)", "Foot Rub (15m)",
+    "Tech Free Hour", "Watch Movie (No Work)",
+    "Do Dishes (All Day)", "Vacuum & Mop",
+    "Do Laundry (All Day)", "Grocery Shopping",
+    "Organize A Room", "Pay For Gas (Tank)",
+    "Spa Day (Baby Watch)", "Diaper Duty (All Day)",
+    "24hr Mom Break", "Sleep In",
+    "Personal Chauffeur", "One 'Yes' Day",
+    "Back Massage (30m)", "Back Scratching (10m)",
+    "Trip to Lake", "Go on a Hike",
+    "Wildcard #1", "Wildcard #2"
+]
+
+def generate_id():
+    # Format: XXXX-XXXX (e.g. A9B2-K8L1)
+    chars = string.ascii_uppercase + string.digits
+    p1 = ''.join(random.choices(chars, k=4))
+    p2 = ''.join(random.choices(chars, k=4))
+    return f"{p1}-{p2}"
+
+db = {
+    "definitions": {},
+    "redeemed": {}
 }
+
+used_ids = set()
+
+for item in items:
+    while True:
+        new_id = generate_id()
+        if new_id not in used_ids:
+            used_ids.add(new_id)
+            db["definitions"][new_id] = item
+            break
+
+with open('coupons.json', 'w') as f:
+    json.dump(db, f, indent=2)
+
+print(f"Generated {len(items)} coupons with random IDs.")
 EOF
+
+# Run the generator
+python3 generate_db.py
+rm generate_db.py
 
 # 2.2 SERVER (server.py)
 cat <<EOF > server.py
@@ -171,7 +195,7 @@ with ThreadingSimpleServer(("", PORT), CouponHandler) as httpd:
     httpd.serve_forever()
 EOF
 
-# 2.3 FRONTEND (redeem.html)
+# 2.3 FRONTEND (redeem.html) - Subtle Colors
 cat <<EOF > redeem.html
 <!DOCTYPE html>
 <html lang="en">
@@ -179,187 +203,197 @@ cat <<EOF > redeem.html
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Jennifer's Christmas Coupons</title>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --primary: #c0392b; /* Christmas Red */
-    --secondary: #27ae60; /* Christmas Green */
-    --gold: #f1c40f;
-    --dark: #2c3e50;
-    --light: #fdfbf7;
-    --card-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    /* Subtle Christmas Palette */
+    --primary: #5d001e; /* Deep Burgundy */
+    --secondary: #2f4f4f; /* Dark Slate Green */
+    --accent: #d4af37; /* Muted Gold */
+    --bg: #fdfbf7; /* Cream */
+    --text: #333;
+    --card-bg: #fff;
+    --card-shadow: 0 2px 10px rgba(0,0,0,0.05);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     font-family: 'Lato', sans-serif;
-    background-color: var(--primary);
-    background-image: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.1) 1%, transparent 1%),
-                      radial-gradient(circle at 80% 80%, rgba(255,255,255,0.1) 1%, transparent 1%);
-    background-size: 50px 50px;
-    color: var(--dark);
+    background-color: var(--bg);
+    color: var(--text);
     min-height: 100vh;
     padding: 20px;
     position: relative;
     overflow-x: hidden;
   }
 
-  .snow-container {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      z-index: 0;
+  /* Elegant Header */
+  header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding-top: 20px;
   }
 
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 3rem;
+    color: var(--primary);
+    margin-bottom: 10px;
+    letter-spacing: 1px;
+  }
+
+  p.subtitle {
+    color: var(--secondary);
+    font-style: italic;
+    font-size: 1.1rem;
+  }
+
+  /* Stats Bar */
+  .stats-bar {
+    max-width: 600px;
+    margin: 0 auto 40px auto;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 15px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: var(--card-shadow);
+    color: var(--secondary);
+    font-family: 'Playfair Display', serif;
+  }
+
+  .stats-val { font-weight: bold; color: var(--primary); margin-left: 5px; }
+
+  /* Grid */
   .container {
-    max-width: 800px;
+    max-width: 1000px;
     margin: 0 auto;
     position: relative;
     z-index: 1;
   }
 
-  header {
-    text-align: center;
-    color: #fff;
-    margin-bottom: 30px;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.2);
-  }
-
-  h1 {
-    font-family: 'Cinzel', serif;
-    font-size: 2.5rem;
-    margin-bottom: 10px;
-    border-bottom: 2px solid rgba(255,255,255,0.3);
-    display: inline-block;
-    padding-bottom: 10px;
-  }
-
-  .stats-bar {
-    background: rgba(255,255,255,0.9);
-    border-radius: 50px;
-    padding: 10px 20px;
-    margin-bottom: 30px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: var(--card-shadow);
-    font-weight: bold;
-    color: var(--dark);
-  }
-
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 25px;
   }
 
+  /* Card Design */
   .card {
-    background: #fff;
-    border-radius: 8px;
+    background: var(--card-bg);
+    border-radius: 4px;
     overflow: hidden;
     position: relative;
     box-shadow: var(--card-shadow);
-    transition: transform 0.2s;
-    border: 1px solid #eee;
+    border: 1px solid #f0f0f0;
+    transition: transform 0.2s, box-shadow 0.2s;
   }
 
   .card:hover {
-    transform: translateY(-3px);
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
   }
 
   .card.redeemed {
-    opacity: 0.7;
-    background: #f8f9fa;
+    opacity: 0.6;
+    background: #fafafa;
   }
 
-  .card-header {
-    background: var(--dark);
-    color: #fff;
-    padding: 10px 15px;
-    font-size: 0.8rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+  .card-top {
+    height: 6px;
+    background: linear-gradient(90deg, var(--primary) 0%, var(--primary) 40%, var(--accent) 40%, var(--accent) 60%, var(--secondary) 60%, var(--secondary) 100%);
   }
 
   .card-body {
-    padding: 20px;
+    padding: 25px;
     text-align: center;
-    border-bottom: 2px dashed #ddd; /* Perforation look */
     position: relative;
   }
 
-  .card-body::before, .card-body::after {
-      content: '';
+  /* Decorative corner */
+  .card-body::after {
+      content: '❄';
       position: absolute;
-      bottom: -10px;
-      width: 20px;
-      height: 20px;
-      background: var(--primary); /* Match bg */
-      border-radius: 50%;
+      top: 10px;
+      right: 15px;
+      color: #eee;
+      font-size: 1.5rem;
   }
-  .card-body::before { left: -10px; }
-  .card-body::after { right: -10px; }
 
   .card-title {
-    font-size: 1.2rem;
+    font-size: 1.3rem;
     font-weight: 700;
     margin-bottom: 5px;
-    font-family: 'Cinzel', serif;
-    color: var(--primary);
+    font-family: 'Playfair Display', serif;
+    color: var(--text);
   }
 
-  .card-footer {
-    padding: 15px;
-    text-align: center;
+  .card-code {
+    font-size: 0.75rem;
+    color: #999;
+    letter-spacing: 1px;
+    margin-bottom: 20px;
+    font-family: monospace;
   }
 
   .btn {
     display: inline-block;
-    background: var(--secondary);
-    color: white;
-    padding: 8px 20px;
-    border-radius: 20px;
+    background: transparent;
+    color: var(--primary);
+    padding: 8px 25px;
+    border: 1px solid var(--primary);
+    border-radius: 2px;
     text-decoration: none;
     font-weight: bold;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     cursor: pointer;
-    border: none;
-    transition: background 0.2s;
+    transition: all 0.3s;
+    text-transform: uppercase;
+    letter-spacing: 1px;
   }
 
-  .btn:hover { background: #219150; }
+  .btn:hover { background: var(--primary); color: white; }
 
   .btn.disabled {
-    background: #ccc;
+    border-color: #ccc;
+    color: #999;
     cursor: default;
+    background: transparent;
   }
+  .btn.disabled:hover { background: transparent; color: #999; }
 
   .stamp {
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%) rotate(-15deg);
-    border: 3px solid var(--primary);
+    border: 3px double var(--primary);
     color: var(--primary);
-    font-size: 1.5rem;
+    font-size: 1.4rem;
+    font-family: 'Courier New', Courier, monospace;
     font-weight: bold;
-    padding: 5px 10px;
+    padding: 5px 15px;
     text-transform: uppercase;
-    border-radius: 5px;
-    opacity: 0.3;
     pointer-events: none;
+    background: rgba(255,255,255,0.8);
   }
+
+  footer {
+      text-align: center;
+      margin-top: 50px;
+      font-size: 0.9rem;
+  }
+  footer a { color: var(--secondary); text-decoration: none; border-bottom: 1px dotted var(--secondary); }
 
   /* Modal */
   .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.8);
+      background: rgba(93, 0, 30, 0.4); /* Primary with opacity */
+      backdrop-filter: blur(2px);
       z-index: 100;
       display: none;
       align-items: center;
@@ -368,44 +402,47 @@ cat <<EOF > redeem.html
   }
   .modal {
       background: white;
-      padding: 30px;
-      border-radius: 10px;
-      max-width: 400px;
+      padding: 40px;
+      border-radius: 4px;
+      max-width: 450px;
       width: 100%;
       text-align: center;
-      position: relative;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+      border-top: 4px solid var(--accent);
   }
-  .modal h2 { margin-bottom: 15px; color: var(--primary); font-family: 'Cinzel', serif; }
+  .modal h2 { margin-bottom: 15px; color: var(--primary); font-family: 'Playfair Display', serif; }
   .modal-icon { font-size: 3rem; margin-bottom: 15px; display: block; }
-  .modal-close { margin-top: 20px; background: var(--dark); }
+  .modal-close { margin-top: 25px; background: var(--secondary); color: white; border: none; }
+  .modal-close:hover { background: #1a3030; }
 
-  /* Loading */
-  .loading { color: white; text-align: center; font-style: italic; margin-top: 50px; }
+  .loading { color: #888; text-align: center; font-style: italic; margin-top: 50px; }
 
   @media (max-width: 600px) {
-      h1 { font-size: 1.8rem; }
+      h1 { font-size: 2.2rem; }
       .grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
 <body>
 
-<div id="snow" class="snow-container"></div>
-
 <div class="container">
   <header>
     <h1>Christmas Coupons</h1>
-    <p>Use them wisely!</p>
+    <p class="subtitle">A special gift, from me to you.</p>
   </header>
 
   <div class="stats-bar">
-    <span>Available: <span id="count-avail">0</span></span>
-    <span>Redeemed: <span id="count-used">0</span></span>
+    <span>Available <span id="count-avail" class="stats-val">0</span></span>
+    <span>Redeemed <span id="count-used" class="stats-val">0</span></span>
   </div>
 
   <div id="grid" class="grid">
-    <div class="loading">Loading festive goodies...</div>
+    <div class="loading">Loading coupons...</div>
   </div>
+
+  <footer>
+    <a href="/print.html" target="_blank">🖨️ View Printable QR Codes</a>
+  </footer>
 </div>
 
 <!-- Modal -->
@@ -423,35 +460,6 @@ cat <<EOF > redeem.html
     let definitions = {};
     let redeemed = {};
 
-    // --- Snow Effect ---
-    function createSnow() {
-        const container = document.getElementById('snow');
-        const count = 50;
-        for (let i = 0; i < count; i++) {
-            const flake = document.createElement('div');
-            flake.style.position = 'absolute';
-            flake.style.width = Math.random() * 5 + 2 + 'px';
-            flake.style.height = flake.style.width;
-            flake.style.background = 'rgba(255,255,255,0.7)';
-            flake.style.borderRadius = '50%';
-            flake.style.left = Math.random() * 100 + '%';
-            flake.style.top = -10 + 'px';
-            flake.style.animation = \`fall \${Math.random() * 5 + 3}s linear infinite\`;
-            flake.style.animationDelay = Math.random() * 5 + 's';
-            container.appendChild(flake);
-        }
-
-        const style = document.createElement('style');
-        style.innerHTML = \`
-            @keyframes fall {
-                to { transform: translateY(100vh) rotate(360deg); }
-            }
-        \`;
-        document.head.appendChild(style);
-    }
-    createSnow();
-
-    // --- Data Loading ---
     async function loadData() {
         try {
             const res = await fetch('/api/data');
@@ -481,7 +489,6 @@ cat <<EOF > redeem.html
             return { id, name, date: redeemed[id] };
         });
 
-        // Sort: Available first
         items.sort((a, b) => {
             if (a.date && !b.date) return 1;
             if (!a.date && b.date) return -1;
@@ -502,15 +509,11 @@ cat <<EOF > redeem.html
                 : '';
 
             card.innerHTML = \`
-                <div class="card-header">
-                    <span>\${item.id}</span>
-                    <span>\${isRedeemed ? item.date.split(' ')[0] : 'VALID'}</span>
-                </div>
+                <div class="card-top"></div>
                 <div class="card-body">
                     <div class="card-title">\${item.name}</div>
+                    <div class="card-code">\${item.id}</div>
                     \${stampHtml}
-                </div>
-                <div class="card-footer">
                     \${btnHtml}
                 </div>
             \`;
@@ -518,7 +521,6 @@ cat <<EOF > redeem.html
         });
     }
 
-    // --- Redemption Logic ---
     async function confirmRedeem(code) {
         if(!confirm("Are you sure you want to redeem '" + definitions[code] + "'?")) return;
         doRedeem(code);
@@ -533,31 +535,27 @@ cat <<EOF > redeem.html
             const result = await res.json();
 
             if (res.status === 200) {
-                showModal('success', 'Success!', \`You redeemed: \${result.item}\`, result.date);
+                showModal('success', 'Enjoy!', \`You redeemed: \${result.item}\`, result.date);
             } else if (res.status === 409) {
                 showModal('error', 'Already Used', \`\${result.item} was used on:\`, result.date);
             } else {
                 showModal('error', 'Error', result.message);
             }
-            loadData(); // Refresh UI
+            loadData();
         } catch (e) {
             showModal('error', 'Connection Error', 'Could not reach server.');
         }
     }
 
-    // --- URL Logic for QR Codes ---
     async function checkUrl() {
         const params = new URLSearchParams(window.location.search);
         const code = params.get('code');
         if (code && definitions[code]) {
-            // Remove code from URL so refresh doesn't re-trigger
             window.history.replaceState({}, document.title, window.location.pathname);
-            // Attempt redeem immediately
             await doRedeem(code);
         }
     }
 
-    // --- Modal ---
     function showModal(type, title, msg, date='') {
         const modal = document.getElementById('modal');
         const icon = document.getElementById('modal-icon');
@@ -565,9 +563,8 @@ cat <<EOF > redeem.html
         const p = document.getElementById('modal-msg');
         const d = document.getElementById('modal-date');
 
-        icon.innerText = type === 'success' ? '🎄' : '⚠️';
+        icon.innerText = type === 'success' ? '✨' : '⚠️';
         h2.innerText = title;
-        h2.style.color = type === 'success' ? 'var(--secondary)' : 'var(--primary)';
         p.innerText = msg;
         d.innerText = date;
 
@@ -578,7 +575,6 @@ cat <<EOF > redeem.html
         document.getElementById('modal').style.display = 'none';
     }
 
-    // --- Init ---
     window.addEventListener('DOMContentLoaded', async () => {
         await loadData();
         checkUrl();
@@ -588,7 +584,102 @@ cat <<EOF > redeem.html
 </html>
 EOF
 
-# 2.4 CLI TOOL (coupons)
+# 2.4 QR PRINT PAGE (print.html)
+cat <<EOF > print.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Print Coupons</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400&display=swap" rel="stylesheet">
+<style>
+    body { font-family: 'Lato', sans-serif; background: #eee; padding: 20px; -webkit-print-color-adjust: exact; }
+    h1 { text-align: center; font-family: 'Playfair Display', serif; color: #5d001e; }
+    .no-print { text-align: center; margin-bottom: 20px; }
+
+    .grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr); /* 2 per row for printing */
+        gap: 30px;
+        max-width: 800px;
+        margin: 0 auto;
+    }
+
+    .coupon {
+        background: white;
+        border: 2px dashed #d4af37; /* Gold Dash */
+        padding: 20px;
+        display: flex;
+        align-items: center;
+        page-break-inside: avoid;
+        position: relative;
+    }
+
+    .coupon-info { flex: 1; padding-right: 20px; }
+    .coupon-title { font-size: 1.5rem; font-family: 'Playfair Display', serif; font-weight: bold; margin-bottom: 5px; color: #5d001e; }
+    .coupon-code { font-family: monospace; color: #555; background: #f9f9f9; padding: 2px 5px; border-radius: 3px; display: inline-block; margin-top: 5px; }
+    .coupon-qr img { width: 100px; height: 100px; display: block; }
+
+    .watermark {
+        position: absolute;
+        bottom: 5px; right: 5px;
+        font-size: 0.7rem; color: #ccc;
+    }
+
+    @media print {
+        body { background: white; padding: 0; }
+        .no-print { display: none; }
+        .grid { width: 100%; max-width: 100%; gap: 15px; grid-template-columns: 1fr 1fr; }
+        .coupon { border-color: #aaa; }
+    }
+</style>
+</head>
+<body>
+
+<div class="no-print">
+    <h1>Printable Coupons</h1>
+    <p>Use your browser's Print function (Ctrl+P) to print these out.</p>
+</div>
+
+<div id="list" class="grid">Loading...</div>
+
+<script>
+    async function load() {
+        const res = await fetch('/api/data');
+        const data = await res.json();
+        const defs = data.definitions;
+        const list = document.getElementById('list');
+        list.innerHTML = '';
+
+        // Base URL for QR Codes (assumes same host)
+        const baseUrl = window.location.protocol + '//' + window.location.host + '/redeem.html?code=';
+
+        Object.entries(defs).forEach(([code, name]) => {
+            const url = baseUrl + code;
+            // Using a reliable public QR API
+            const qrSrc = \`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=\${encodeURIComponent(url)}\`;
+
+            const div = document.createElement('div');
+            div.className = 'coupon';
+            div.innerHTML = \`
+                <div class="coupon-info">
+                    <div class="coupon-title">\${name}</div>
+                    <div class="coupon-code">\${code}</div>
+                </div>
+                <div class="coupon-qr">
+                    <img src="\${qrSrc}" alt="QR Code" />
+                </div>
+            \`;
+            list.appendChild(div);
+        });
+    }
+    load();
+</script>
+</body>
+</html>
+EOF
+
+# 2.5 CLI TOOL (coupons)
 cat <<EOF > coupons
 #!/usr/bin/env python3
 import json
@@ -760,6 +851,9 @@ echo "==========================================================================
 echo ""
 echo "🌐 Access the App here:"
 echo "   http://$IP:$PORT"
+echo ""
+echo "🖨️  Print Coupons & QR Codes:"
+echo "   http://$IP:$PORT/print.html"
 echo ""
 echo "📱 CLI Commands (Type 'coupons'):"
 echo "   coupons list      -> Show all coupons"
