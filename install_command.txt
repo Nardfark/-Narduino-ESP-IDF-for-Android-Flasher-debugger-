@@ -874,7 +874,7 @@ chmod +x coupons
 
 # --- 3. CREATE SYSTEMD SERVICE ---
 echo "⚙️  Configuring Systemd..."
-sudo cat <<EOF > /etc/systemd/system/coupon_server.service
+sudo tee /etc/systemd/system/coupon_server.service > /dev/null <<EOF
 [Unit]
 Description=Christmas Coupon Server
 After=network.target
