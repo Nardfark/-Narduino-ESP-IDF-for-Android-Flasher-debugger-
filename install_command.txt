@@ -1,16 +1,14 @@
+cat << 'INSTALL_EOF' > install_coupons.sh
 #!/bin/bash
 
 # ==================================================================================
-# 🎄 Jennifer's Upgraded Christmas Coupon Server (v2) 🎄
+# 🎄 Jennifer's Upgraded Christmas Coupon Server (v3) 🎄
 # ==================================================================================
-# This script installs a standalone Python web server and CLI for managing coupons.
 # Features:
 # - Random Non-Sequential IDs
 # - Subtle Christmas Styling
-# - QR Code Printing
+# - QR Code Printing (Double-Sided Business Card Layout 2x5)
 # - Systemd Service
-#
-# USAGE: Just run this script!
 # ==================================================================================
 
 APP_DIR="$HOME/christmas_coupons"
@@ -1037,3 +1035,6 @@ echo "   coupons redeem ID -> Redeem manually"
 echo "   coupons reset     -> Reset all"
 echo ""
 echo "Merry Christmas! 🎄"
+INSTALL_EOF
+chmod +x install_coupons.sh
+./install_coupons.sh
