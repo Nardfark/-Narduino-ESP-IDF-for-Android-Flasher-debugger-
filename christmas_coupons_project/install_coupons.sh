@@ -1,63 +1,52 @@
+cat << 'INSTALL_EOF' > install_coupons.sh
 #!/bin/bash
 
 # ==================================================================================
-# 🎄 Jennifer's Upgraded Christmas Coupon Server (v2) 🎄
-# ==================================================================================
-# This script installs a standalone Python web server and CLI for managing coupons.
-# Features:
-# - Random Non-Sequential IDs
-# - Subtle Christmas Styling
-# - QR Code Printing
-# - Systemd Service
-#
-# USAGE: Just run this script!
+# 🎄 Jennifer's Upgraded Christmas Coupon Server (v4 - Clean Install Edition) 🎄
 # ==================================================================================
 
 APP_DIR="$HOME/christmas_coupons"
 PORT=6969
 USER=$(whoami)
 
-echo "🎅 Ho Ho Ho! Starting installation..."
+echo "🎅 Ho Ho Ho! Starting clean installation..."
 
 # --- 1. PRE-FLIGHT CHECKS & CLEANUP ---
 echo "🔄 Stopping existing service if running..."
 sudo systemctl stop coupon_server 2>/dev/null || true
 
-# Check Port (should be free now)
+# Check Port
 if ss -tuln | grep -q ":$PORT "; then
-    echo "⚠️  WARNING: Port $PORT seems to be in use by another process."
-    read -p "Do you want to try and kill the process on port $PORT? (y/N) " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        PID=$(lsof -t -i:$PORT)
-        if [ -n "$PID" ]; then
-            kill -9 $PID
-            echo "✅ Process killed."
-        else
-            echo "❌ Could not find process. Exiting."
-            exit 1
-        fi
-    else
-        echo "❌ Exiting. Please free port $PORT."
-        exit 1
+    echo "⚠️  WARNING: Port $PORT seems to be in use."
+    PID=$(lsof -t -i:$PORT)
+    if [ -n "$PID" ]; then
+        echo "🔪 Killing process $PID to free port..."
+        kill -9 $PID
     fi
 fi
 
-# Ensure Directory Exists (Idempotent)
+# --- NUCLEAR OPTION: BACKUP & WIPE ---
+if [ -d "$APP_DIR" ]; then
+    BACKUP_NAME="${APP_DIR}_backup_$(date +%s)"
+    echo "📦 Backing up existing directory to $BACKUP_NAME..."
+    mv "$APP_DIR" "$BACKUP_NAME"
+    echo "🧹 Clean slate prepared."
+fi
+
 mkdir -p "$APP_DIR"
 cd "$APP_DIR"
-echo "📂 Working in directory $APP_DIR"
+echo "📂 Created new directory: $APP_DIR"
 
 # --- 2. GENERATE FILES ---
 
-# 2.1 DATABASE GENERATOR (Merge/Update Logic)
-echo "🎲 Updating coupons database..."
+# 2.1 DATABASE GENERATOR (30 ITEMS)
+echo "🎲 Generating fresh database..."
 cat <<EOF > generate_db.py
 import json
 import random
 import string
-import os
 
-# New expanded list (30 items) with categories
+# Full list of 30 items
 new_items = [
     {"name": "Back Scratching (5m)", "category": "Relaxation"},
     {"name": "Back Scratching (5m)", "category": "Relaxation"},
@@ -99,23 +88,7 @@ def generate_id():
 
 db = {"definitions": {}, "redeemed": {}, "categories": {}}
 
-# Load existing if available
-if os.path.exists('coupons.json'):
-    try:
-        with open('coupons.json', 'r') as f:
-            existing_db = json.load(f)
-            db["redeemed"] = existing_db.get("redeemed", {})
-            # We will regenerate definitions to ensure categories are applied
-            # but we try to map old IDs if names match to preserve redeemed status logic if needed.
-            # However, simpler approach: Regenerate all IDs to ensure clean state for the new list,
-            # unless the user specifically wants to keep old redemptions.
-            # Given "the server is still the same", user likely wants the NEW list.
-            # We will archive the old one just in case.
-            pass
-    except:
-        pass
-
-# Generate new DB with 30 items
+# Generate new DB
 used_ids = set()
 for item in new_items:
     while True:
@@ -129,13 +102,8 @@ for item in new_items:
 with open('coupons.json', 'w') as f:
     json.dump(db, f, indent=2)
 
-print(f"Generated {len(new_items)} coupons with categories.")
+print(f"Generated {len(new_items)} coupons.")
 EOF
-
-# Backup old DB if it exists and differs
-if [ -f "coupons.json" ]; then
-    cp coupons.json coupons.json.bak
-fi
 
 python3 generate_db.py
 rm generate_db.py
@@ -230,7 +198,7 @@ with ThreadingSimpleServer(("", PORT), CouponHandler) as httpd:
     httpd.serve_forever()
 EOF
 
-# 2.3 FRONTEND (admin.html - formerly redeem.html)
+# 2.3 FRONTEND (admin.html)
 cat <<EOF > admin.html
 <!DOCTYPE html>
 <html lang="en">
@@ -249,370 +217,89 @@ cat <<EOF > admin.html
     --card-bg: #fff;
     --card-shadow: 0 2px 10px rgba(0,0,0,0.05);
   }
-
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
   body {
     font-family: 'Lato', sans-serif;
     background-color: var(--bg);
     color: var(--text);
     min-height: 100vh;
     padding: 20px;
-    position: relative;
-    overflow-x: hidden;
   }
-
-  /* Elegant Header */
-  header {
-    text-align: center;
-    margin-bottom: 40px;
-    padding-top: 20px;
-  }
-
-  h1 {
-    font-family: 'Playfair Display', serif;
-    font-size: 3rem;
-    color: var(--primary);
-    margin-bottom: 10px;
-    letter-spacing: 1px;
-  }
-
-  p.subtitle {
-    color: var(--secondary);
-    font-style: italic;
-    font-size: 1.1rem;
-  }
-
-  /* Stats Bar */
+  header { text-align: center; margin-bottom: 40px; padding-top: 20px; }
+  h1 { font-family: 'Playfair Display', serif; font-size: 3rem; color: var(--primary); margin-bottom: 10px; }
+  p.subtitle { color: var(--secondary); font-style: italic; font-size: 1.1rem; }
   .stats-bar {
-    max-width: 600px;
-    margin: 0 auto 40px auto;
-    background: #fff;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
-    padding: 15px 30px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: var(--card-shadow);
-    color: var(--secondary);
-    font-family: 'Playfair Display', serif;
+    max-width: 600px; margin: 0 auto 40px auto; background: #fff;
+    border: 1px solid #e0e0e0; border-radius: 4px; padding: 15px 30px;
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: var(--card-shadow); color: var(--secondary); font-family: 'Playfair Display', serif;
   }
-
   .stats-val { font-weight: bold; color: var(--primary); margin-left: 5px; }
-
-  /* Grid */
-  .container {
-    max-width: 1000px;
-    margin: 0 auto;
-    position: relative;
-    z-index: 1;
-  }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 25px;
-  }
-
-  /* Card Design */
+  .container { max-width: 1000px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 25px; }
   .card {
-    background: var(--card-bg);
-    border-radius: 4px;
-    overflow: hidden;
-    position: relative;
-    box-shadow: var(--card-shadow);
-    border: 1px solid #f0f0f0;
-    transition: transform 0.2s, box-shadow 0.2s;
+    background: var(--card-bg); border-radius: 4px; overflow: hidden;
+    position: relative; box-shadow: var(--card-shadow); border: 1px solid #f0f0f0;
   }
-
-  .card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-  }
-
-  .card.redeemed {
-    opacity: 0.6;
-    background: #fafafa;
-  }
-
-  .card-top {
-    height: 6px;
-    background: linear-gradient(90deg, var(--primary) 0%, var(--primary) 40%, var(--accent) 40%, var(--accent) 60%, var(--secondary) 60%, var(--secondary) 100%);
-  }
-
-  .card-body {
-    padding: 25px;
-    text-align: center;
-    position: relative;
-  }
-
-  /* Decorative corner */
-  .card-body::after {
-      content: '❄';
-      position: absolute;
-      top: 10px;
-      right: 15px;
-      color: #eee;
-      font-size: 1.5rem;
-  }
-
-  .card-title {
-    font-size: 1.3rem;
-    font-weight: 700;
-    margin-bottom: 5px;
-    font-family: 'Playfair Display', serif;
-    color: var(--text);
-  }
-
-  .card-code {
-    font-size: 0.75rem;
-    color: #999;
-    letter-spacing: 1px;
-    margin-bottom: 20px;
-    font-family: monospace;
-  }
-
+  .card.redeemed { opacity: 0.6; background: #fafafa; }
+  .card-top { height: 6px; background: linear-gradient(90deg, var(--primary) 0%, var(--primary) 40%, var(--accent) 40%, var(--accent) 60%, var(--secondary) 60%, var(--secondary) 100%); }
+  .card-body { padding: 25px; text-align: center; }
+  .card-title { font-size: 1.3rem; font-weight: 700; margin-bottom: 5px; font-family: 'Playfair Display', serif; color: var(--text); }
+  .card-code { font-size: 0.75rem; color: #999; letter-spacing: 1px; margin-bottom: 20px; font-family: monospace; }
   .btn {
-    display: inline-block;
-    background: transparent;
-    color: var(--primary);
-    padding: 8px 25px;
-    border: 1px solid var(--primary);
-    border-radius: 2px;
-    text-decoration: none;
-    font-weight: bold;
-    font-size: 0.85rem;
-    cursor: pointer;
-    transition: all 0.3s;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    display: inline-block; background: transparent; color: var(--primary);
+    padding: 8px 25px; border: 1px solid var(--primary); border-radius: 2px;
+    text-decoration: none; font-weight: bold; cursor: pointer; text-transform: uppercase;
   }
-
   .btn:hover { background: var(--primary); color: white; }
-
-  .btn.disabled {
-    border-color: #ccc;
-    color: #999;
-    cursor: default;
-    background: transparent;
-  }
-  .btn.disabled:hover { background: transparent; color: #999; }
-
+  .btn.disabled { border-color: #ccc; color: #999; cursor: default; background: transparent; }
   .stamp {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%) rotate(-15deg);
-    border: 3px double var(--primary);
-    color: var(--primary);
-    font-size: 1.4rem;
-    font-family: 'Courier New', Courier, monospace;
-    font-weight: bold;
-    padding: 5px 15px;
-    text-transform: uppercase;
-    pointer-events: none;
-    background: rgba(255,255,255,0.8);
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-15deg);
+    border: 3px double var(--primary); color: var(--primary); font-size: 1.4rem;
+    font-family: 'Courier New', Courier, monospace; font-weight: bold; padding: 5px 15px;
+    text-transform: uppercase; pointer-events: none; background: rgba(255,255,255,0.8);
   }
-
-  footer {
-      text-align: center;
-      margin-top: 50px;
-      font-size: 0.9rem;
-  }
+  footer { text-align: center; margin-top: 50px; font-size: 0.9rem; }
   footer a { color: var(--secondary); text-decoration: none; border-bottom: 1px dotted var(--secondary); }
-
-  /* Modal */
-  .modal-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(93, 0, 30, 0.4); /* Primary with opacity */
-      backdrop-filter: blur(2px);
-      z-index: 100;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-  }
-  .modal {
-      background: white;
-      padding: 40px;
-      border-radius: 4px;
-      max-width: 450px;
-      width: 100%;
-      text-align: center;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-      border-top: 4px solid var(--accent);
-  }
-  .modal h2 { margin-bottom: 15px; color: var(--primary); font-family: 'Playfair Display', serif; }
-  .modal-icon { font-size: 3rem; margin-bottom: 15px; display: block; }
-  .modal-close { margin-top: 25px; background: var(--secondary); color: white; border: none; }
-  .modal-close:hover { background: #1a3030; }
-
-  .loading { color: #888; text-align: center; font-style: italic; margin-top: 50px; }
-
-  @media (max-width: 600px) {
-      h1 { font-size: 2.2rem; }
-      .grid { grid-template-columns: 1fr; }
-  }
 </style>
 </head>
 <body>
-
 <div class="container">
-  <header>
-    <h1>Christmas Coupons</h1>
-    <p class="subtitle">A special gift, from me to you.</p>
-  </header>
-
+  <header><h1>Christmas Coupons</h1><p class="subtitle">Admin Dashboard</p></header>
   <div class="stats-bar">
     <span>Available <span id="count-avail" class="stats-val">0</span></span>
     <span>Redeemed <span id="count-used" class="stats-val">0</span></span>
   </div>
-
-  <div id="grid" class="grid">
-    <div class="loading">Loading coupons...</div>
-  </div>
-
-  <footer>
-    <a href="/print.html" target="_blank" class="btn">🖨️ Print Coupons</a>
-  </footer>
+  <div id="grid" class="grid"><div class="loading">Loading...</div></div>
+  <footer><a href="/print.html" target="_blank" class="btn">🖨️ Print Coupons</a></footer>
 </div>
-
-<!-- Modal -->
-<div id="modal" class="modal-overlay">
-    <div class="modal">
-        <span id="modal-icon" class="modal-icon">🎁</span>
-        <h2 id="modal-title">Redeemed!</h2>
-        <p id="modal-msg">Enjoy your gift.</p>
-        <div id="modal-date" style="font-size:0.8rem; color:#666; margin-top:5px;"></div>
-        <button class="btn modal-close" onclick="closeModal()">Close</button>
-    </div>
-</div>
-
 <script>
-    let definitions = {};
-    let redeemed = {};
-
     async function loadData() {
         try {
             const res = await fetch('/api/data');
             const data = await res.json();
-            definitions = data.definitions;
-            redeemed = data.redeemed;
-            render();
-            updateStats();
-        } catch (e) {
-            console.error(e);
-            document.getElementById('grid').innerHTML = '<div class="loading">Error loading coupons :(</div>';
-        }
-    }
+            const items = Object.entries(data.definitions).map(([id, name]) => ({ id, name, date: data.redeemed[id] }));
+            items.sort((a, b) => (a.date ? 1 : 0) - (b.date ? 1 : 0));
 
-    function updateStats() {
-        const total = Object.keys(definitions).length;
-        const used = Object.keys(redeemed).length;
-        document.getElementById('count-avail').innerText = total - used;
-        document.getElementById('count-used').innerText = used;
-    }
+            document.getElementById('count-avail').innerText = Object.keys(data.definitions).length - Object.keys(data.redeemed).length;
+            document.getElementById('count-used').innerText = Object.keys(data.redeemed).length;
 
-    function render() {
-        const grid = document.getElementById('grid');
-        grid.innerHTML = '';
-
-        const items = Object.entries(definitions).map(([id, name]) => {
-            return { id, name, date: redeemed[id] };
-        });
-
-        items.sort((a, b) => {
-            if (a.date && !b.date) return 1;
-            if (!a.date && b.date) return -1;
-            return 0;
-        });
-
-        items.forEach(item => {
-            const isRedeemed = !!item.date;
-            const card = document.createElement('div');
-            card.className = \`card \${isRedeemed ? 'redeemed' : ''}\`;
-
-            const btnHtml = isRedeemed
-                ? \`<div class="btn disabled">REDEEMED</div>\`
-                : \`<button class="btn" onclick="confirmRedeem('\${item.id}')">REDEEM</button>\`;
-
-            const stampHtml = isRedeemed
-                ? \`<div class="stamp">USED</div>\`
-                : '';
-
-            card.innerHTML = \`
-                <div class="card-top"></div>
-                <div class="card-body">
-                    <div class="card-title">\${item.name}</div>
-                    <div class="card-code">\${item.id}</div>
-                    \${stampHtml}
-                    \${btnHtml}
-                </div>
-            \`;
-            grid.appendChild(card);
-        });
-    }
-
-    async function confirmRedeem(code) {
-        if(!confirm("Are you sure you want to redeem '" + definitions[code] + "'?")) return;
-        doRedeem(code);
-    }
-
-    async function doRedeem(code) {
-        try {
-            const res = await fetch('/api/redeem', {
-                method: 'POST',
-                body: JSON.stringify({ code })
+            let html = '';
+            items.forEach(item => {
+                const isRedeemed = !!item.date;
+                const btn = isRedeemed ? '<div class="btn disabled">REDEEMED</div>' : \`<button class="btn" onclick="redeem('\${item.id}')">REDEEM</button>\`;
+                const stamp = isRedeemed ? '<div class="stamp">USED</div>' : '';
+                html += \`<div class="card \${isRedeemed ? 'redeemed' : ''}"><div class="card-top"></div><div class="card-body"><div class="card-title">\${item.name}</div><div class="card-code">\${item.id}</div>\${stamp}\${btn}</div></div>\`;
             });
-            const result = await res.json();
-
-            if (res.status === 200) {
-                showModal('success', 'Enjoy!', \`You redeemed: \${result.item}\`, result.date);
-            } else if (res.status === 409) {
-                showModal('error', 'Already Used', \`\${result.item} was used on:\`, result.date);
-            } else {
-                showModal('error', 'Error', result.message);
-            }
-            loadData();
-        } catch (e) {
-            showModal('error', 'Connection Error', 'Could not reach server.');
-        }
+            document.getElementById('grid').innerHTML = html;
+        } catch (e) { document.getElementById('grid').innerText = "Error"; }
     }
-
-    async function checkUrl() {
-        const params = new URLSearchParams(window.location.search);
-        const code = params.get('code');
-        if (code && definitions[code]) {
-            window.history.replaceState({}, document.title, window.location.pathname);
-            await doRedeem(code);
-        }
+    async function redeem(code) {
+        if(!confirm("Redeem this coupon?")) return;
+        await fetch('/api/redeem', { method: 'POST', body: JSON.stringify({ code }) });
+        loadData();
     }
-
-    function showModal(type, title, msg, date='') {
-        const modal = document.getElementById('modal');
-        const icon = document.getElementById('modal-icon');
-        const h2 = document.getElementById('modal-title');
-        const p = document.getElementById('modal-msg');
-        const d = document.getElementById('modal-date');
-
-        icon.innerText = type === 'success' ? '✨' : '⚠️';
-        h2.innerText = title;
-        p.innerText = msg;
-        d.innerText = date;
-
-        modal.style.display = 'flex';
-    }
-
-    function closeModal() {
-        document.getElementById('modal').style.display = 'none';
-    }
-
-    window.addEventListener('DOMContentLoaded', async () => {
-        await loadData();
-        checkUrl();
-    });
+    window.addEventListener('DOMContentLoaded', loadData);
 </script>
 </body>
 </html>
@@ -628,423 +315,97 @@ cat <<EOF > index.html
 <title>Christmas Coupons</title>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Montserrat:wght@300;400&display=swap" rel="stylesheet">
 <style>
-    :root {
-        --bg-dark: #0a0f0d;
-        --neon-gold: #ffd700;
-        --neon-red: #ff3333;
-        --glass: rgba(255, 255, 255, 0.05);
-    }
-
+    :root { --bg-dark: #0a0f0d; --neon-gold: #ffd700; --glass: rgba(255, 255, 255, 0.05); }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-        background: var(--bg-dark);
-        color: white;
-        font-family: 'Montserrat', sans-serif;
-        overflow-x: hidden;
-        height: 100vh;
-        display: flex;
-        flex-direction: column;
-    }
-
-    header {
-        text-align: center;
-        padding: 20px;
-        z-index: 10;
-        background: linear-gradient(to bottom, black, transparent);
-    }
-
-    h1 {
-        font-family: 'Cinzel', serif;
-        color: var(--neon-gold);
-        text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
-        font-size: 2rem;
-    }
-
-    .category-nav {
-        display: flex;
-        overflow-x: auto;
-        padding: 10px 20px;
-        gap: 15px;
-        scrollbar-width: none;
-        background: rgba(0,0,0,0.3);
-    }
-    .category-nav::-webkit-scrollbar { display: none; }
-
-    .cat-btn {
-        background: transparent;
-        border: 1px solid rgba(255,255,255,0.3);
-        color: #aaa;
-        padding: 8px 16px;
-        border-radius: 20px;
-        white-space: nowrap;
-        cursor: pointer;
-        transition: all 0.3s;
-        font-size: 0.9rem;
-    }
-    .cat-btn.active {
-        border-color: var(--neon-gold);
-        color: var(--neon-gold);
-        background: rgba(255, 215, 0, 0.1);
-        box-shadow: 0 0 15px rgba(255, 215, 0, 0.2);
-    }
-
-    /* 3D Carousel Container */
-    .carousel-stage {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        perspective: 1000px;
-        position: relative;
-        overflow: hidden;
-    }
-
-    .carousel {
-        position: relative;
-        width: 300px;
-        height: 450px;
-        transform-style: preserve-3d;
-        transition: transform 0.5s ease-out;
-    }
-
-    .card {
-        position: absolute;
-        width: 100%;
-        height: 100%;
-        left: 0;
-        top: 0;
-        background: linear-gradient(135deg, #1a1a1a, #2a2a2a);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 15px;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        transition: all 0.5s ease-out;
-        opacity: 0.5;
-        transform-origin: center center;
-        cursor: pointer;
-        /* Glassmorphism */
-        backdrop-filter: blur(5px);
-        -webkit-backdrop-filter: blur(5px);
-    }
-
-    .card.active {
-        opacity: 1;
-        box-shadow: 0 0 30px rgba(255, 215, 0, 0.2);
-        border-color: var(--neon-gold);
-        z-index: 10;
-    }
-
-    .card-category {
-        text-transform: uppercase;
-        font-size: 0.8rem;
-        letter-spacing: 2px;
-        color: #888;
-    }
-
-    .card-title {
-        font-family: 'Cinzel', serif;
-        font-size: 2rem;
-        line-height: 1.2;
-        background: linear-gradient(45deg, #fff, #ccc);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-
-    .card-status {
-        text-align: right;
-        font-size: 0.9rem;
-    }
-    .status-badge {
-        padding: 5px 10px;
-        border-radius: 10px;
-        background: rgba(0,255,0,0.1);
-        color: #0f0;
-    }
-    .status-badge.used {
-        background: rgba(255,0,0,0.1);
-        color: #f00;
-    }
-
-    .nav-btn {
-        position: absolute;
-        top: 50%;
-        transform: translateY(-50%);
-        background: rgba(255,255,255,0.1);
-        border: none;
-        color: white;
-        font-size: 2rem;
-        padding: 20px;
-        cursor: pointer;
-        z-index: 20;
-        border-radius: 50%;
-        transition: 0.3s;
-    }
-    .nav-btn:hover { background: rgba(255,255,255,0.3); }
-    .prev { left: 20px; }
-    .next { right: 20px; }
-
-    /* Redeem Overlay */
-    .overlay {
-        position: fixed;
-        top: 0; left: 0; width: 100%; height: 100%;
-        background: rgba(0,0,0,0.9);
-        z-index: 100;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        flex-direction: column;
-        backdrop-filter: blur(10px);
-    }
-
-    .overlay-content {
-        text-align: center;
-        max-width: 80%;
-        animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    }
-
-    .btn-redeem {
-        background: var(--neon-gold);
-        color: black;
-        border: none;
-        padding: 15px 40px;
-        font-size: 1.2rem;
-        font-weight: bold;
-        border-radius: 50px;
-        cursor: pointer;
-        margin-top: 30px;
-        box-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
-        transition: transform 0.2s;
-    }
-    .btn-redeem:active { transform: scale(0.95); }
-
-    @keyframes popIn {
-        from { transform: scale(0.8); opacity: 0; }
-        to { transform: scale(1); opacity: 1; }
-    }
-
-    footer {
-        text-align: center;
-        padding: 20px;
-        font-size: 0.8rem;
-        color: #555;
-    }
+    body { background: var(--bg-dark); color: white; font-family: 'Montserrat', sans-serif; overflow-x: hidden; height: 100vh; display: flex; flex-direction: column; }
+    header { text-align: center; padding: 20px; background: linear-gradient(to bottom, black, transparent); }
+    h1 { font-family: 'Cinzel', serif; color: var(--neon-gold); text-shadow: 0 0 10px rgba(255, 215, 0, 0.5); font-size: 2rem; }
+    .category-nav { display: flex; overflow-x: auto; padding: 10px 20px; gap: 15px; background: rgba(0,0,0,0.3); }
+    .cat-btn { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #aaa; padding: 8px 16px; border-radius: 20px; cursor: pointer; white-space: nowrap; }
+    .cat-btn.active { border-color: var(--neon-gold); color: var(--neon-gold); background: rgba(255, 215, 0, 0.1); box-shadow: 0 0 15px rgba(255, 215, 0, 0.2); }
+    .carousel-stage { flex: 1; display: flex; align-items: center; justify-content: center; perspective: 1000px; overflow: hidden; position: relative; }
+    .carousel { position: relative; width: 300px; height: 450px; transform-style: preserve-3d; transition: transform 0.5s ease-out; }
+    .card { position: absolute; width: 100%; height: 100%; background: linear-gradient(135deg, #1a1a1a, #2a2a2a); border: 1px solid rgba(255,255,255,0.1); border-radius: 15px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 10px 30px rgba(0,0,0,0.5); transition: all 0.5s ease-out; opacity: 0.5; backdrop-filter: blur(5px); }
+    .card.active { opacity: 1; box-shadow: 0 0 30px rgba(255, 215, 0, 0.2); border-color: var(--neon-gold); z-index: 10; }
+    .card-category { text-transform: uppercase; font-size: 0.8rem; letter-spacing: 2px; color: #888; }
+    .card-title { font-family: 'Cinzel', serif; font-size: 2rem; background: linear-gradient(45deg, #fff, #ccc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .status-badge { padding: 5px 10px; border-radius: 10px; background: rgba(0,255,0,0.1); color: #0f0; font-size: 0.9rem; align-self: flex-end; }
+    .status-badge.used { background: rgba(255,0,0,0.1); color: #f00; }
+    .nav-btn { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.1); border: none; color: white; font-size: 2rem; padding: 20px; cursor: pointer; z-index: 20; border-radius: 50%; }
+    .prev { left: 20px; } .next { right: 20px; }
+    .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100; display: none; align-items: center; justify-content: center; flex-direction: column; backdrop-filter: blur(10px); }
+    .btn-redeem { background: var(--neon-gold); color: black; border: none; padding: 15px 40px; font-size: 1.2rem; font-weight: bold; border-radius: 50px; cursor: pointer; margin-top: 30px; box-shadow: 0 0 20px rgba(255, 215, 0, 0.4); }
+    footer { text-align: center; padding: 20px; color: #555; }
     footer a { color: #777; text-decoration: none; }
-
 </style>
 </head>
 <body>
-
-<header>
-    <h1>The Collection</h1>
-</header>
-
-<div class="category-nav" id="catNav">
-    <button class="cat-btn active" onclick="filter('All')">All</button>
-</div>
-
+<header><h1>The Collection</h1></header>
+<div class="category-nav" id="catNav"><button class="cat-btn active" onclick="filter('All')">All</button></div>
 <div class="carousel-stage">
     <button class="nav-btn prev" onclick="move(-1)">❮</button>
-    <div class="carousel" id="carousel">
-        <!-- Cards injected here -->
-    </div>
+    <div class="carousel" id="carousel"></div>
     <button class="nav-btn next" onclick="move(1)">❯</button>
 </div>
-
-<footer>
-    <a href="/admin.html">Manage Coupons</a>
-</footer>
-
-<!-- Overlay -->
+<footer><a href="/admin.html">Manage Coupons</a></footer>
 <div class="overlay" id="overlay">
-    <div class="overlay-content">
-        <div class="card-category" id="ov-cat">RELAXATION</div>
-        <h2 id="ov-title" style="font-size: 3rem; margin: 20px 0; font-family: 'Cinzel'; color: white;">Title</h2>
-        <div id="ov-status" style="color: #aaa; margin-bottom: 20px;">Available</div>
+    <div style="text-align: center; max-width: 80%;">
+        <div class="card-category" id="ov-cat"></div>
+        <h2 id="ov-title" style="font-size: 3rem; margin: 20px 0; font-family: 'Cinzel'; color: white;"></h2>
+        <div id="ov-status" style="color: #aaa; margin-bottom: 20px;"></div>
         <button class="btn-redeem" id="btn-redeem" onclick="redeemCurrent()">REDEEM NOW</button>
-        <div style="margin-top:30px; cursor:pointer; color:#777" onclick="closeOverlay()">Close</div>
+        <div style="margin-top:30px; cursor:pointer; color:#777" onclick="document.getElementById('overlay').style.display='none'">Close</div>
     </div>
 </div>
-
 <script>
-    let allCoupons = [];
-    let displayedCoupons = [];
-    let currentIndex = 0;
-    let definitions = {};
-    let categories = {};
-    let redeemed = {};
-
+    let all=[], displayed=[], idx=0, defs={}, cats={}, red={};
     async function init() {
-        const res = await fetch('/api/data');
-        const data = await res.json();
-        definitions = data.definitions;
-        categories = data.categories || {};
-        redeemed = data.redeemed;
-
-        // Transform to array
-        allCoupons = Object.entries(definitions).map(([id, name]) => {
-            return {
-                id,
-                name,
-                category: categories[id] || 'General',
-                used: !!redeemed[id],
-                date: redeemed[id]
-            };
-        });
-
-        setupCategories();
+        const d = await (await fetch('/api/data')).json();
+        defs=d.definitions; cats=d.categories||{}; red=d.redeemed;
+        all = Object.entries(defs).map(([id, name]) => ({ id, name, category: cats[id]||'General', used: !!red[id], date: red[id] }));
+        const s = new Set(['All']); all.forEach(c=>s.add(c.category));
+        const nav = document.getElementById('catNav'); nav.innerHTML = '';
+        s.forEach(c => { const b=document.createElement('button'); b.className=\`cat-btn \${c==='All'?'active':''}\`; b.innerText=c; b.onclick=()=>filter(c); nav.appendChild(b); });
         filter('All');
     }
-
-    function setupCategories() {
-        const cats = new Set(['All']);
-        allCoupons.forEach(c => cats.add(c.category));
-
-        const nav = document.getElementById('catNav');
-        nav.innerHTML = '';
-        cats.forEach(c => {
-            const btn = document.createElement('button');
-            btn.className = \`cat-btn \${c === 'All' ? 'active' : ''}\`;
-            btn.innerText = c;
-            btn.onclick = () => filter(c);
-            nav.appendChild(btn);
+    function filter(c) {
+        document.querySelectorAll('.cat-btn').forEach(b=>b.classList.toggle('active', b.innerText===c));
+        displayed = c==='All' ? all : all.filter(x=>x.category===c);
+        idx=0; render();
+    }
+    function render() {
+        const con = document.getElementById('carousel'); con.innerHTML = '';
+        displayed.forEach((item, i) => {
+            const c = document.createElement('div'); c.className='card'; c.onclick=()=>openOv(i);
+            const st = item.used ? '<span class="status-badge used">REDEEMED</span>' : '<span class="status-badge">AVAILABLE</span>';
+            c.innerHTML = \`<div class="card-category">\${item.category}</div><div class="card-title">\${item.name}</div><div class="card-status">\${st}</div>\`;
+            upd(c, i, idx); con.appendChild(c);
         });
     }
-
-    function filter(cat) {
-        // Update buttons
-        document.querySelectorAll('.cat-btn').forEach(b => {
-            b.classList.toggle('active', b.innerText === cat);
-        });
-
-        if (cat === 'All') {
-            displayedCoupons = allCoupons;
-        } else {
-            displayedCoupons = allCoupons.filter(c => c.category === cat);
-        }
-
-        currentIndex = 0;
-        renderCarousel();
-    }
-
-    function renderCarousel() {
-        const container = document.getElementById('carousel');
-        container.innerHTML = '';
-
-        displayedCoupons.forEach((item, index) => {
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.onclick = () => openOverlay(index);
-
-            const status = item.used ? '<span class="status-badge used">REDEEMED</span>' : '<span class="status-badge">AVAILABLE</span>';
-
-            card.innerHTML = \`
-                <div class="card-category">\${item.category}</div>
-                <div class="card-title">\${item.name}</div>
-                <div class="card-status">\${status}</div>
-            \`;
-
-            // Set initial 3D transform based on index relative to current
-            updateCardStyle(card, index, currentIndex);
-
-            container.appendChild(card);
-        });
-    }
-
-    function updateCardStyle(card, index, activeIndex) {
-        const offset = index - activeIndex;
-        const absOffset = Math.abs(offset);
-
-        if (absOffset > 2) {
-            card.style.display = 'none';
-        } else {
-            card.style.display = 'flex';
-            card.classList.toggle('active', offset === 0);
-
-            // 3D Logic
-            const translateZ = offset === 0 ? 0 : -100 - (absOffset * 50);
-            const translateX = offset * 60; // 60% shift
-            const rotateY = offset * -5;
-            const opacity = offset === 0 ? 1 : 0.5 - (absOffset * 0.1);
-
-            card.style.transform = \`translateX(\${translateX}%) translateZ(\${translateZ}px) rotateY(\${rotateY}deg)\`;
-            card.style.opacity = opacity;
-            card.style.zIndex = 10 - absOffset;
+    function upd(c, i, active) {
+        const off = i - active, abs = Math.abs(off);
+        if(abs>2) { c.style.display='none'; } else {
+            c.style.display='flex'; c.classList.toggle('active', off===0);
+            c.style.transform = \`translateX(\${off*60}%) translateZ(\${off===0?0:-100-(abs*50)}px) rotateY(\${off*-5}deg)\`;
+            c.style.opacity = off===0?1:0.5-(abs*0.1); c.style.zIndex=10-abs;
         }
     }
-
-    function move(dir) {
-        const newIndex = currentIndex + dir;
-        if (newIndex >= 0 && newIndex < displayedCoupons.length) {
-            currentIndex = newIndex;
-            const cards = document.querySelectorAll('.card');
-            cards.forEach((card, idx) => updateCardStyle(card, idx, currentIndex));
-        }
+    function move(d) { const n=idx+d; if(n>=0 && n<displayed.length) { idx=n; document.querySelectorAll('.card').forEach((c,i)=>upd(c,i,idx)); } }
+    function openOv(i) {
+        if(i!==idx) { idx=i; document.querySelectorAll('.card').forEach((c,x)=>upd(c,x,idx)); return; }
+        const it = displayed[i];
+        document.getElementById('ov-cat').innerText=it.category; document.getElementById('ov-title').innerText=it.name;
+        const b = document.getElementById('btn-redeem'), s = document.getElementById('ov-status');
+        if(it.used) { s.innerText='Redeemed on '+it.date; s.style.color='#ff3333'; b.style.display='none'; }
+        else { s.innerText='Available'; s.style.color='#0f0'; b.style.display='block'; b.onclick=()=>doRedeem(it.id); }
+        document.getElementById('overlay').style.display='flex';
     }
-
-    function openOverlay(index) {
-        const item = displayedCoupons[index];
-        if (index !== currentIndex) {
-            currentIndex = index;
-            const cards = document.querySelectorAll('.card');
-            cards.forEach((card, idx) => updateCardStyle(card, idx, currentIndex));
-            return;
-        }
-
-        document.getElementById('ov-cat').innerText = item.category;
-        document.getElementById('ov-title').innerText = item.name;
-
-        const btn = document.getElementById('btn-redeem');
-        const status = document.getElementById('ov-status');
-
-        if (item.used) {
-            status.innerText = 'Redeemed on ' + item.date;
-            status.style.color = '#ff3333';
-            btn.style.display = 'none';
-        } else {
-            status.innerText = 'Available for use';
-            status.style.color = '#00ff00';
-            btn.style.display = 'block';
-            btn.onclick = () => redeemItem(item.id);
-        }
-
-        document.getElementById('overlay').style.display = 'flex';
+    async function doRedeem(c) {
+        if(!confirm("Sure?")) return;
+        if((await fetch('/api/redeem', { method:'POST', body:JSON.stringify({code:c}) })).ok) { alert("Done!"); await init(); document.getElementById('overlay').style.display='none'; }
     }
-
-    function closeOverlay() {
-        document.getElementById('overlay').style.display = 'none';
-    }
-
-    async function redeemItem(code) {
-        if (!confirm("Are you sure?")) return;
-
-        try {
-            const res = await fetch('/api/redeem', {
-                method: 'POST',
-                body: JSON.stringify({ code })
-            });
-            if (res.ok) {
-                // Reload data to reflect change
-                await init();
-                closeOverlay();
-                alert("Redeemed Successfully!");
-            }
-        } catch(e) {
-            alert("Connection Error");
-        }
-    }
-
-    // Swipe support
-    let touchStartX = 0;
-    document.addEventListener('touchstart', e => touchStartX = e.changedTouches[0].screenX);
-    document.addEventListener('touchend', e => {
-        if (e.changedTouches[0].screenX < touchStartX - 50) move(1);
-        if (e.changedTouches[0].screenX > touchStartX + 50) move(-1);
-    });
-
+    let tx=0; document.addEventListener('touchstart', e=>tx=e.changedTouches[0].screenX);
+    document.addEventListener('touchend', e=>{ if(e.changedTouches[0].screenX<tx-50) move(1); if(e.changedTouches[0].screenX>tx+50) move(-1); });
     init();
 </script>
 </body>
@@ -1060,397 +421,73 @@ cat <<EOF > print.html
 <title>Print Coupons</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400&display=swap" rel="stylesheet">
 <style>
-    /* Reset & Page Setup */
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-        font-family: 'Lato', sans-serif;
-        background: #eee;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-    }
-
-    /* Screen Styles */
-    .screen-only {
-        text-align: center;
-        padding: 20px;
-    }
+    body { font-family: 'Lato', sans-serif; background: #eee; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .screen-only { text-align: center; padding: 20px; }
     h1 { font-family: 'Playfair Display', serif; color: #5d001e; margin-bottom: 10px; }
-    .print-btn {
-        background: #5d001e; color: white; border: none; padding: 10px 20px;
-        font-size: 1rem; cursor: pointer; border-radius: 4px;
-        font-family: 'Lato', sans-serif;
-    }
-    .print-btn:hover { background: #7a0026; }
-
-    /* Print Layout: 8.5" x 11" with 2x5 Grid */
-    @page {
-        size: letter;
-        margin: 0.5in; /* Standard margins */
-    }
-
-    .page {
-        width: 7.5in; /* 8.5 - 2*0.5 */
-        height: 10in; /* 11 - 2*0.5 */
-        margin: 0 auto;
-        display: grid;
-        grid-template-columns: repeat(2, 3.5in); /* 2 cols of 3.5in */
-        grid-auto-rows: 2in; /* Rows of 2in */
-        gap: 0;
-        justify-content: center;
-        align-content: start; /* Align to top */
-        page-break-after: always;
-    }
-
-    .coupon {
-        width: 3.5in;
-        height: 2in;
-        border: 1px dashed #ccc; /* Light dash for cutting guide */
-        padding: 10px;
-        display: flex;
-        align-items: center;
-        background: white;
-        position: relative;
-        overflow: hidden;
-    }
-
-    .coupon-back {
-        width: 3.5in;
-        height: 2in;
-        border: 1px dashed #ccc;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        background: white;
-        position: relative;
-        text-align: center;
-    }
-
-    .coupon-info {
-        flex: 1;
-        padding-right: 10px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        height: 100%;
-    }
-
-    .coupon-title {
-        font-size: 14pt;
-        font-family: 'Playfair Display', serif;
-        font-weight: bold;
-        color: #5d001e;
-        line-height: 1.2;
-        margin-bottom: 5px;
-    }
-
-    .coupon-code {
-        font-family: monospace;
-        font-size: 10pt;
-        color: #555;
-        background: #f5f5f5;
-        padding: 2px 6px;
-        border-radius: 4px;
-        align-self: flex-start;
-    }
-
-    .coupon-qr {
-        width: 90px;
-        height: 90px;
-        flex-shrink: 0;
-    }
-    .coupon-qr img {
-        width: 100%;
-        height: 100%;
-        display: block;
-    }
-
-    .decoration {
-        position: absolute;
-        top: -10px; right: -10px;
-        font-size: 3rem; color: rgba(212, 175, 55, 0.1); /* Gold watermark */
-        pointer-events: none;
-    }
-
-    /* Back Side Styles */
-    .back-title {
-        font-family: 'Playfair Display', serif;
-        font-size: 16pt;
-        color: #5d001e;
-        font-weight: bold;
-        margin-bottom: 10px;
-    }
-    .back-serial {
-        font-family: monospace;
-        font-size: 8pt;
-        color: #999;
-        position: absolute;
-        bottom: 10px;
-        right: 10px;
-    }
-    .back-decor {
-        position: absolute;
-        top: 50%; left: 50%;
-        transform: translate(-50%, -50%);
-        font-size: 4rem;
-        color: rgba(93, 0, 30, 0.05);
-        pointer-events: none;
-        z-index: 0;
-    }
-
-    @media print {
-        body { background: white; margin: 0; }
-        .screen-only { display: none; }
-        .page { margin: 0; border: none; }
-        .coupon, .coupon-back { border: 1px solid #eee; } /* Lighter border for print */
-    }
+    .print-btn { background: #5d001e; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+    @page { size: letter; margin: 0.5in; }
+    .page { width: 7.5in; height: 10in; margin: 0 auto 40px; display: grid; grid-template-columns: repeat(2, 3.5in); grid-auto-rows: 2in; background: white; page-break-after: always; }
+    .page-label { position: absolute; top: -30px; width: 100%; text-align: center; display: none; }
+    .coupon, .coupon-back { width: 3.5in; height: 2in; border: 1px dashed #ccc; padding: 10px; display: flex; align-items: center; position: relative; overflow: hidden; }
+    .coupon-back { flex-direction: column; justify-content: center; text-align: center; }
+    .coupon-info { flex: 1; padding-right: 10px; }
+    .coupon-title { font-size: 14pt; font-family: 'Playfair Display', serif; color: #5d001e; font-weight: bold; }
+    .coupon-code { font-family: monospace; font-size: 10pt; color: #555; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; display: inline-block; margin-top: 5px; }
+    .coupon-qr { width: 90px; height: 90px; flex-shrink: 0; } .coupon-qr img { width: 100%; }
+    .decoration { position: absolute; top: -10px; right: -10px; font-size: 3rem; color: rgba(212, 175, 55, 0.1); }
+    .back-title { font-family: 'Playfair Display', serif; font-size: 14pt; color: #5d001e; font-weight: bold; }
+    .back-desc { font-size: 10pt; color: #555; margin: 5px 0 15px; }
+    .back-serial { font-family: monospace; font-size: 8pt; color: #999; position: absolute; bottom: 10px; right: 10px; }
+    @media print { body { background: white; margin: 0; } .screen-only { display: none; } .page { margin: 0; box-shadow: none; } }
 </style>
 </head>
 <body>
-
 <div class="screen-only">
     <h1>Printable Coupons (Double-Sided)</h1>
-    <p style="margin-bottom:15px">
-        Layout: Standard Business Cards (2" x 3.5") on Letter Paper (8.5" x 11").<br>
-        <strong>Instructions:</strong> Print double-sided. Flip on long edge (Portrait).
-    </p>
-    <button class="print-btn" onclick="window.print()">🖨️ Print Now</button>
+    <p>Layout: 2"x3.5" Business Cards. Print double-sided (flip on long edge).</p>
+    <button class="print-btn" onclick="window.print()">🖨️ Print</button>
 </div>
-
 <div id="content">Loading...</div>
-
 <script>
     async function load() {
-        const res = await fetch('/api/data');
-        const data = await res.json();
-        const defs = data.definitions;
-        const container = document.getElementById('content');
-        container.innerHTML = '';
+        const d = await (await fetch('/api/data')).json();
+        const items = Object.entries(d.definitions);
+        const con = document.getElementById('content'); con.innerHTML = '';
+        const base = window.location.protocol + '//' + window.location.host + '/redeem.html?code=';
 
-        // Base URL for QR Codes
-        const baseUrl = window.location.protocol + '//' + window.location.host + '/redeem.html?code=';
+        for (let i = 0; i < items.length; i += 10) {
+            const chunk = items.slice(i, i + 10);
 
-        const items = Object.entries(defs);
-        const chunkSize = 10; // 2x5 grid = 10 cards per page
-
-        for (let i = 0; i < items.length; i += chunkSize) {
-            const chunk = items.slice(i, i + chunkSize);
-
-            // --- FRONT PAGE ---
-            const pageFront = document.createElement('div');
-            pageFront.className = 'page front';
-
-            chunk.forEach(([code, name]) => {
-                const url = baseUrl + code;
-                const qrSrc = \`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=\${encodeURIComponent(url)}\`;
-
-                const div = document.createElement('div');
-                div.className = 'coupon';
-                div.innerHTML = \`
-                    <div class="decoration">❄</div>
-                    <div class="coupon-info">
-                        <div class="coupon-title">\${name}</div>
-                        <div class="coupon-code">\${code}</div>
-                    </div>
-                    <div class="coupon-qr">
-                        <img src="\${qrSrc}" alt="QR Code" />
-                    </div>
-                \`;
-                pageFront.appendChild(div);
+            // Front
+            const f = document.createElement('div'); f.className = 'page';
+            chunk.forEach(([c, n]) => {
+                f.innerHTML += \`<div class="coupon"><div class="decoration">❄</div><div class="coupon-info"><div class="coupon-title" contenteditable="true">\${n}</div><div class="coupon-code">\${c}</div></div><div class="coupon-qr"><img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=\${encodeURIComponent(base+c)}"></div></div>\`;
             });
-            container.appendChild(pageFront);
+            con.appendChild(f);
 
-            // --- BACK PAGE ---
-            const pageBack = document.createElement('div');
-            pageBack.className = 'page back';
-
-            // For the back page, we need to handle mirroring for double-sided printing.
-            // Front:  Left(A)  Right(B)
-            // Back:   Left(B)  Right(A)
-
-            // Iterate by rows (pairs of 2)
+            // Back (Mirrored)
+            const b = document.createElement('div'); b.className = 'page';
             for (let r = 0; r < 5; r++) {
-                const idx1 = r * 2;     // Front Left
-                const idx2 = r * 2 + 1; // Front Right
-
-                const item1 = chunk[idx1];
-                const item2 = chunk[idx2];
-
-                if (!item1 && !item2) break; // End of chunk
-
-                // Add Right Item (Back of B) first (Left position on back sheet)
-                if (item2) {
-                    pageBack.appendChild(createBackCard(item2));
-                } else {
-                    // Empty spacer if no item
-                    pageBack.appendChild(createSpacer());
-                }
-
-                // Add Left Item (Back of A) second (Right position on back sheet)
-                if (item1) {
-                    pageBack.appendChild(createBackCard(item1));
-                } else {
-                    pageBack.appendChild(createSpacer());
-                }
+                const i1 = chunk[r*2], i2 = chunk[r*2+1];
+                if (!i1 && !i2) break;
+                b.appendChild(mkBack(i2)); // Right (on front) becomes Left (on back)
+                b.appendChild(mkBack(i1));
             }
-            container.appendChild(pageBack);
+            con.appendChild(b);
         }
     }
-
-    function createBackCard([code, name]) {
-        const div = document.createElement('div');
-        div.className = 'coupon-back';
-        div.innerHTML = \`
-            <div class="back-decor">🎄</div>
-            <div class="back-title">\${name}</div>
-            <div class="back-serial">Serial: \${code}</div>
-        \`;
-        return div;
+    function mkBack(i) {
+        const d = document.createElement('div'); d.className = 'coupon-back';
+        if(i) d.innerHTML = \`<div class="back-title" contenteditable="true">\${i[1]}</div><div class="back-desc" contenteditable="true">Valid for one use. Merry Christmas!</div><div class="back-serial">Serial: \${i[0]}</div>\`;
+        else d.style.border = 'none';
+        return d;
     }
-
-    function createSpacer() {
-        const div = document.createElement('div');
-        div.className = 'coupon-back';
-        div.style.border = 'none'; // Invisible
-        return div;
-    }
-
     load();
 </script>
 </body>
 </html>
 EOF
-
-# 2.5 CLI TOOL (coupons)
-cat <<EOF > coupons
-#!/usr/bin/env python3
-import json
-import sys
-import os
-import argparse
-from datetime import datetime
-
-# Assuming the script is run from the app directory or relative to it
-APP_DIR = "$APP_DIR"
-DB_FILE = os.path.join(APP_DIR, "coupons.json")
-
-# Colors
-RED = '\033[91m'
-GREEN = '\033[92m'
-YELLOW = '\033[93m'
-BLUE = '\033[94m'
-BOLD = '\033[1m'
-RESET = '\033[0m'
-
-def load_db():
-    if not os.path.exists(DB_FILE):
-        print(f"{RED}Error: Database not found at {DB_FILE}{RESET}")
-        sys.exit(1)
-    with open(DB_FILE, 'r') as f:
-        return json.load(f)
-
-def save_db(data):
-    with open(DB_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-
-def print_header():
-    print(f"\n{BOLD}{RED}🎄 CHRISTMAS COUPON MANAGER 🎄{RESET}")
-    print(f"{YELLOW}{'-'*60}{RESET}")
-
-def cmd_list(args):
-    data = load_db()
-    defs = data['definitions']
-    redeemed = data['redeemed']
-
-    print(f"{BOLD}{'CODE':<15} | {'STATUS':<10} | {'OFFER'}{RESET}")
-    print("-" * 60)
-
-    for code, name in defs.items():
-        if code in redeemed:
-            status = f"{RED}USED{RESET}"
-            line_color = "\033[90m" # Dark Gray
-        else:
-            status = f"{GREEN}OPEN{RESET}"
-            line_color = RESET
-
-        print(f"{line_color}{code:<15}{RESET} | {status}       | {line_color}{name}{RESET}")
-    print("-" * 60)
-    print(f"Total: {len(defs)} | Available: {len(defs) - len(redeemed)} | Redeemed: {len(redeemed)}")
-
-def cmd_details(args):
-    data = load_db()
-    redeemed = data['redeemed']
-
-    if not redeemed:
-        print("No coupons have been redeemed yet.")
-        return
-
-    print(f"{BOLD}{'CODE':<15} | {'DATE':<20} | {'OFFER'}{RESET}")
-    print("-" * 60)
-    for code, date in redeemed.items():
-        name = data['definitions'].get(code, "Unknown")
-        print(f"{code:<15} | {date:<20} | {name}")
-
-def cmd_redeem(args):
-    data = load_db()
-    code = args.code
-
-    if code not in data['definitions']:
-        print(f"{RED}Error: Invalid coupon code '{code}'{RESET}")
-        return
-
-    if code in data['redeemed']:
-        print(f"{YELLOW}Coupon '{code}' was already redeemed on {data['redeemed'][code]}{RESET}")
-        return
-
-    # Redeem
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    data['redeemed'][code] = timestamp
-    save_db(data)
-    print(f"{GREEN}Success! Redeemed: {data['definitions'][code]}{RESET}")
-    print(f"Timestamp: {timestamp}")
-
-def cmd_reset(args):
-    if input(f"{RED}Are you sure you want to RESET all coupons? (y/N): {RESET}").lower() != 'y':
-        print("Aborted.")
-        return
-
-    data = load_db()
-    data['redeemed'] = {}
-    save_db(data)
-    print(f"{GREEN}All coupons have been reset to AVAILABLE.{RESET}")
-
-def main():
-    parser = argparse.ArgumentParser(description="Manage Christmas Coupons")
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
-
-    subparsers.add_parser("list", help="List all coupons and status")
-    subparsers.add_parser("details", help="Show details of redeemed coupons")
-
-    p_redeem = subparsers.add_parser("redeem", help="Manually redeem a coupon")
-    p_redeem.add_argument("code", help="Coupon Code (e.g., JEN-XMAS-001)")
-
-    subparsers.add_parser("reset", help="Reset all coupons to available")
-
-    args = parser.parse_args()
-
-    print_header()
-    if args.command == "list":
-        cmd_list(args)
-    elif args.command == "details":
-        cmd_details(args)
-    elif args.command == "redeem":
-        cmd_redeem(args)
-    elif args.command == "reset":
-        cmd_reset(args)
-    else:
-        parser.print_help()
-
-if __name__ == "__main__":
-    main()
-EOF
-chmod +x coupons
 
 # --- 3. CREATE SYSTEMD SERVICE ---
 echo "⚙️  Configuring Systemd..."
@@ -1471,36 +508,23 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-# --- 4. FINALIZE ---
-echo "🔄 Reloading Systemd..."
-sudo systemctl daemon-reload
+# --- 4. FINALIZATION ---
 echo "🚀 Starting Service..."
+sudo systemctl daemon-reload
 sudo systemctl enable coupon_server
 sudo systemctl restart coupon_server
 
-# Bash Alias
-if ! grep -q "alias coupons=" "$HOME/.bashrc"; then
-    echo "alias coupons='$APP_DIR/coupons'" >> "$HOME/.bashrc"
-    echo "✨ Added alias 'coupons' to .bashrc"
+# Add alias
+if ! grep -q "alias coupons=" ~/.bashrc; then
+    echo "alias coupons='cd $APP_DIR && python3 server.py'" >> ~/.bashrc
 fi
 
-# Get IP
 IP=$(hostname -I | awk '{print $1}')
-
 echo ""
-echo "=================================================================================="
-echo "🎁 INSTALLATION COMPLETE!"
-echo "=================================================================================="
-echo ""
-echo "🌐 Access the App here:"
-echo "   http://$IP:$PORT"
-echo ""
-echo "🖨️  Print Coupons & QR Codes:"
-echo "   http://$IP:$PORT/print.html"
-echo ""
-echo "📱 CLI Commands (Type 'coupons'):"
-echo "   coupons list      -> Show all coupons"
-echo "   coupons redeem ID -> Redeem manually"
-echo "   coupons reset     -> Reset all"
-echo ""
-echo "Merry Christmas! 🎄"
+echo "===================================================="
+echo "✅  INSTALLATION COMPLETE!"
+echo "===================================================="
+echo "🌐 User App (Carousel):  http://$IP:$PORT/index.html"
+echo "🔧 Admin/Print:          http://$IP:$PORT/admin.html"
+echo "===================================================="
+INSTALL_EOF
