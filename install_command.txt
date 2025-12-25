@@ -630,6 +630,18 @@ cat <<EOF > print.html
         justify-content: center;
         align-content: start; /* Align to top */
         page-break-after: always;
+        position: relative;
+    }
+
+    .page-label {
+        position: absolute;
+        top: -30px;
+        left: 0;
+        width: 100%;
+        text-align: center;
+        font-weight: bold;
+        color: #555;
+        display: none; /* Hidden on print */
     }
 
     .coupon {
@@ -674,6 +686,11 @@ cat <<EOF > print.html
         color: #5d001e;
         line-height: 1.2;
         margin-bottom: 5px;
+        outline: none; /* Remove focus outline */
+    }
+    .coupon-title:hover {
+        background: rgba(0,0,0,0.05);
+        cursor: text;
     }
 
     .coupon-code {
@@ -707,11 +724,29 @@ cat <<EOF > print.html
     /* Back Side Styles */
     .back-title {
         font-family: 'Playfair Display', serif;
-        font-size: 16pt;
+        font-size: 14pt;
         color: #5d001e;
         font-weight: bold;
-        margin-bottom: 10px;
+        margin-bottom: 5px;
+        outline: none;
     }
+    .back-title:hover {
+        background: rgba(0,0,0,0.05);
+        cursor: text;
+    }
+
+    .back-desc {
+        font-size: 10pt;
+        color: #555;
+        margin-bottom: 15px;
+        outline: none;
+        max-width: 90%;
+    }
+    .back-desc:hover {
+        background: rgba(0,0,0,0.05);
+        cursor: text;
+    }
+
     .back-serial {
         font-family: monospace;
         font-size: 8pt;
@@ -733,8 +768,17 @@ cat <<EOF > print.html
     @media print {
         body { background: white; margin: 0; }
         .screen-only { display: none; }
-        .page { margin: 0; border: none; }
+        .page-label { display: none; }
+        .page { margin: 0; border: none; box-shadow: none; margin-bottom: 0; }
         .coupon, .coupon-back { border: 1px solid #eee; } /* Lighter border for print */
+    }
+
+    /* Screen visual separation */
+    .page {
+        background: white;
+        margin-bottom: 40px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        padding-top: 1px; /* collapse margin fix */
     }
 </style>
 </head>
@@ -744,7 +788,9 @@ cat <<EOF > print.html
     <h1>Printable Coupons (Double-Sided)</h1>
     <p style="margin-bottom:15px">
         Layout: Standard Business Cards (2" x 3.5") on Letter Paper (8.5" x 11").<br>
-        <strong>Instructions:</strong> Print double-sided. Flip on long edge (Portrait).
+        <strong>Instructions:</strong>
+        1. Click on text to edit description/title if needed.<br>
+        2. Print double-sided (Flip on long edge).
     </p>
     <button class="print-btn" onclick="window.print()">🖨️ Print Now</button>
 </div>
@@ -767,10 +813,12 @@ cat <<EOF > print.html
 
         for (let i = 0; i < items.length; i += chunkSize) {
             const chunk = items.slice(i, i + chunkSize);
+            const pageNum = (i / chunkSize) + 1;
 
             // --- FRONT PAGE ---
             const pageFront = document.createElement('div');
             pageFront.className = 'page front';
+            pageFront.innerHTML = \`<div class="screen-only page-label">Page \${pageNum} (FRONT)</div>\`;
 
             chunk.forEach(([code, name]) => {
                 const url = baseUrl + code;
@@ -781,7 +829,7 @@ cat <<EOF > print.html
                 div.innerHTML = \`
                     <div class="decoration">❄</div>
                     <div class="coupon-info">
-                        <div class="coupon-title">\${name}</div>
+                        <div class="coupon-title" contenteditable="true">\${name}</div>
                         <div class="coupon-code">\${code}</div>
                     </div>
                     <div class="coupon-qr">
@@ -795,12 +843,9 @@ cat <<EOF > print.html
             // --- BACK PAGE ---
             const pageBack = document.createElement('div');
             pageBack.className = 'page back';
+            pageBack.innerHTML = \`<div class="screen-only page-label">Page \${pageNum} (BACK)</div>\`;
 
-            // For the back page, we need to handle mirroring for double-sided printing.
-            // Front:  Left(A)  Right(B)
-            // Back:   Left(B)  Right(A)
-
-            // Iterate by rows (pairs of 2)
+            // Iterate by rows (pairs of 2) for mirroring
             for (let r = 0; r < 5; r++) {
                 const idx1 = r * 2;     // Front Left
                 const idx2 = r * 2 + 1; // Front Right
@@ -814,7 +859,6 @@ cat <<EOF > print.html
                 if (item2) {
                     pageBack.appendChild(createBackCard(item2));
                 } else {
-                    // Empty spacer if no item
                     pageBack.appendChild(createSpacer());
                 }
 
@@ -834,7 +878,8 @@ cat <<EOF > print.html
         div.className = 'coupon-back';
         div.innerHTML = \`
             <div class="back-decor">🎄</div>
-            <div class="back-title">\${name}</div>
+            <div class="back-title" contenteditable="true">\${name}</div>
+            <div class="back-desc" contenteditable="true">Valid for one use. Merry Christmas!</div>
             <div class="back-serial">Serial: \${code}</div>
         \`;
         return div;
