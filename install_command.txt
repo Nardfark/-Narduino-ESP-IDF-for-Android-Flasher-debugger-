@@ -47,61 +47,96 @@ echo "📂 Working in directory $APP_DIR"
 
 # --- 2. GENERATE FILES ---
 
-# 2.1 DATABASE (Only if missing, to preserve IDs)
-if [ ! -f "coupons.json" ]; then
-    echo "🎲 Generating new coupons database..."
-    cat <<EOF > generate_db.py
+# 2.1 DATABASE GENERATOR (Merge/Update Logic)
+echo "🎲 Updating coupons database..."
+cat <<EOF > generate_db.py
 import json
 import random
 import string
+import os
 
-items = [
-    "Back Scratching (5m)", "Back Scratching (5m)",
-    "Foot Rub (15m)", "Foot Rub (15m)",
-    "Tech Free Hour", "Watch Movie (No Work)",
-    "Do Dishes (All Day)", "Vacuum & Mop",
-    "Do Laundry (All Day)", "Grocery Shopping",
-    "Organize A Room", "Pay For Gas (Tank)",
-    "Spa Day (Baby Watch)", "Diaper Duty (All Day)",
-    "24hr Mom Break", "Sleep In",
-    "Personal Chauffeur", "One 'Yes' Day",
-    "Back Massage (30m)", "Back Scratching (10m)",
-    "Trip to Lake", "Go on a Hike",
-    "Wildcard #1", "Wildcard #2"
+# New expanded list (30 items) with categories
+new_items = [
+    {"name": "Back Scratching (5m)", "category": "Relaxation"},
+    {"name": "Back Scratching (5m)", "category": "Relaxation"},
+    {"name": "Foot Rub (15m)", "category": "Relaxation"},
+    {"name": "Foot Rub (15m)", "category": "Relaxation"},
+    {"name": "Back Massage (30m)", "category": "Relaxation"},
+    {"name": "Back Scratching (10m)", "category": "Relaxation"},
+    {"name": "Spa Day (Baby Watch)", "category": "Relaxation"},
+    {"name": "Sleep In", "category": "Relaxation"},
+    {"name": "24hr Mom Break", "category": "Relaxation"},
+    {"name": "Tech Free Hour", "category": "Quality Time"},
+    {"name": "Watch Movie (No Work)", "category": "Quality Time"},
+    {"name": "Trip to Lake", "category": "Adventure"},
+    {"name": "Go on a Hike", "category": "Adventure"},
+    {"name": "Do Dishes (All Day)", "category": "Chores"},
+    {"name": "Vacuum & Mop", "category": "Chores"},
+    {"name": "Do Laundry (All Day)", "category": "Chores"},
+    {"name": "Grocery Shopping", "category": "Chores"},
+    {"name": "Organize A Room", "category": "Chores"},
+    {"name": "Diaper Duty (All Day)", "category": "Chores"},
+    {"name": "Pay For Gas (Tank)", "category": "Gifts"},
+    {"name": "Personal Chauffeur", "category": "Service"},
+    {"name": "One 'Yes' Day", "category": "Special"},
+    {"name": "Wildcard #1", "category": "Special"},
+    {"name": "Wildcard #2", "category": "Special"},
+    {"name": "Breakfast in Bed", "category": "Food"},
+    {"name": "Dinner Choice", "category": "Food"},
+    {"name": "Ice Cream Date", "category": "Food"},
+    {"name": "Game Night", "category": "Quality Time"},
+    {"name": "Walk in the Park", "category": "Adventure"},
+    {"name": "Car Wash", "category": "Chores"}
 ]
 
 def generate_id():
-    # Format: XXXX-XXXX (e.g. A9B2-K8L1)
     chars = string.ascii_uppercase + string.digits
     p1 = ''.join(random.choices(chars, k=4))
     p2 = ''.join(random.choices(chars, k=4))
     return f"{p1}-{p2}"
 
-db = {
-    "definitions": {},
-    "redeemed": {}
-}
+db = {"definitions": {}, "redeemed": {}, "categories": {}}
 
+# Load existing if available
+if os.path.exists('coupons.json'):
+    try:
+        with open('coupons.json', 'r') as f:
+            existing_db = json.load(f)
+            db["redeemed"] = existing_db.get("redeemed", {})
+            # We will regenerate definitions to ensure categories are applied
+            # but we try to map old IDs if names match to preserve redeemed status logic if needed.
+            # However, simpler approach: Regenerate all IDs to ensure clean state for the new list,
+            # unless the user specifically wants to keep old redemptions.
+            # Given "the server is still the same", user likely wants the NEW list.
+            # We will archive the old one just in case.
+            pass
+    except:
+        pass
+
+# Generate new DB with 30 items
 used_ids = set()
-
-for item in items:
+for item in new_items:
     while True:
         new_id = generate_id()
         if new_id not in used_ids:
             used_ids.add(new_id)
-            db["definitions"][new_id] = item
+            db["definitions"][new_id] = item["name"]
+            db["categories"][new_id] = item["category"]
             break
 
 with open('coupons.json', 'w') as f:
     json.dump(db, f, indent=2)
 
-print(f"Generated {len(items)} coupons with random IDs.")
+print(f"Generated {len(new_items)} coupons with categories.")
 EOF
-    python3 generate_db.py
-    rm generate_db.py
-else
-    echo "✅ Existing 'coupons.json' found. Preserving data."
+
+# Backup old DB if it exists and differs
+if [ -f "coupons.json" ]; then
+    cp coupons.json coupons.json.bak
 fi
+
+python3 generate_db.py
+rm generate_db.py
 
 # 2.2 SERVER (server.py)
 cat <<EOF > server.py
@@ -132,9 +167,9 @@ class CouponHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
             return
 
-        # Rewrite root to redeem.html
+        # Rewrite root to index.html (User View)
         if self.path == '/' or self.path.startswith('/?'):
-            self.path = '/redeem.html'
+            self.path = '/index.html'
 
         return http.server.SimpleHTTPRequestHandler.do_GET(self)
 
@@ -193,22 +228,21 @@ with ThreadingSimpleServer(("", PORT), CouponHandler) as httpd:
     httpd.serve_forever()
 EOF
 
-# 2.3 FRONTEND (redeem.html) - Subtle Colors
-cat <<EOF > redeem.html
+# 2.3 FRONTEND (admin.html - formerly redeem.html)
+cat <<EOF > admin.html
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Jennifer's Christmas Coupons</title>
+<title>Coupons Admin</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    /* Subtle Christmas Palette */
-    --primary: #5d001e; /* Deep Burgundy */
-    --secondary: #2f4f4f; /* Dark Slate Green */
-    --accent: #d4af37; /* Muted Gold */
-    --bg: #fdfbf7; /* Cream */
+    --primary: #5d001e;
+    --secondary: #2f4f4f;
+    --accent: #d4af37;
+    --bg: #fdfbf7;
     --text: #333;
     --card-bg: #fff;
     --card-shadow: 0 2px 10px rgba(0,0,0,0.05);
@@ -577,6 +611,439 @@ cat <<EOF > redeem.html
         await loadData();
         checkUrl();
     });
+</script>
+</body>
+</html>
+EOF
+
+# 2.3.5 USER FRONTEND (index.html) - 3D Carousel
+cat <<EOF > index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Christmas Coupons</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Montserrat:wght@300;400&display=swap" rel="stylesheet">
+<style>
+    :root {
+        --bg-dark: #0a0f0d;
+        --neon-gold: #ffd700;
+        --neon-red: #ff3333;
+        --glass: rgba(255, 255, 255, 0.05);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+        background: var(--bg-dark);
+        color: white;
+        font-family: 'Montserrat', sans-serif;
+        overflow-x: hidden;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    header {
+        text-align: center;
+        padding: 20px;
+        z-index: 10;
+        background: linear-gradient(to bottom, black, transparent);
+    }
+
+    h1 {
+        font-family: 'Cinzel', serif;
+        color: var(--neon-gold);
+        text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+        font-size: 2rem;
+    }
+
+    .category-nav {
+        display: flex;
+        overflow-x: auto;
+        padding: 10px 20px;
+        gap: 15px;
+        scrollbar-width: none;
+        background: rgba(0,0,0,0.3);
+    }
+    .category-nav::-webkit-scrollbar { display: none; }
+
+    .cat-btn {
+        background: transparent;
+        border: 1px solid rgba(255,255,255,0.3);
+        color: #aaa;
+        padding: 8px 16px;
+        border-radius: 20px;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-size: 0.9rem;
+    }
+    .cat-btn.active {
+        border-color: var(--neon-gold);
+        color: var(--neon-gold);
+        background: rgba(255, 215, 0, 0.1);
+        box-shadow: 0 0 15px rgba(255, 215, 0, 0.2);
+    }
+
+    /* 3D Carousel Container */
+    .carousel-stage {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        perspective: 1000px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .carousel {
+        position: relative;
+        width: 300px;
+        height: 450px;
+        transform-style: preserve-3d;
+        transition: transform 0.5s ease-out;
+    }
+
+    .card {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        left: 0;
+        top: 0;
+        background: linear-gradient(135deg, #1a1a1a, #2a2a2a);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 15px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        transition: all 0.5s ease-out;
+        opacity: 0.5;
+        transform-origin: center center;
+        cursor: pointer;
+        /* Glassmorphism */
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+    }
+
+    .card.active {
+        opacity: 1;
+        box-shadow: 0 0 30px rgba(255, 215, 0, 0.2);
+        border-color: var(--neon-gold);
+        z-index: 10;
+    }
+
+    .card-category {
+        text-transform: uppercase;
+        font-size: 0.8rem;
+        letter-spacing: 2px;
+        color: #888;
+    }
+
+    .card-title {
+        font-family: 'Cinzel', serif;
+        font-size: 2rem;
+        line-height: 1.2;
+        background: linear-gradient(45deg, #fff, #ccc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .card-status {
+        text-align: right;
+        font-size: 0.9rem;
+    }
+    .status-badge {
+        padding: 5px 10px;
+        border-radius: 10px;
+        background: rgba(0,255,0,0.1);
+        color: #0f0;
+    }
+    .status-badge.used {
+        background: rgba(255,0,0,0.1);
+        color: #f00;
+    }
+
+    .nav-btn {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        background: rgba(255,255,255,0.1);
+        border: none;
+        color: white;
+        font-size: 2rem;
+        padding: 20px;
+        cursor: pointer;
+        z-index: 20;
+        border-radius: 50%;
+        transition: 0.3s;
+    }
+    .nav-btn:hover { background: rgba(255,255,255,0.3); }
+    .prev { left: 20px; }
+    .next { right: 20px; }
+
+    /* Redeem Overlay */
+    .overlay {
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.9);
+        z-index: 100;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        backdrop-filter: blur(10px);
+    }
+
+    .overlay-content {
+        text-align: center;
+        max-width: 80%;
+        animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    .btn-redeem {
+        background: var(--neon-gold);
+        color: black;
+        border: none;
+        padding: 15px 40px;
+        font-size: 1.2rem;
+        font-weight: bold;
+        border-radius: 50px;
+        cursor: pointer;
+        margin-top: 30px;
+        box-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
+        transition: transform 0.2s;
+    }
+    .btn-redeem:active { transform: scale(0.95); }
+
+    @keyframes popIn {
+        from { transform: scale(0.8); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+    }
+
+    footer {
+        text-align: center;
+        padding: 20px;
+        font-size: 0.8rem;
+        color: #555;
+    }
+    footer a { color: #777; text-decoration: none; }
+
+</style>
+</head>
+<body>
+
+<header>
+    <h1>The Collection</h1>
+</header>
+
+<div class="category-nav" id="catNav">
+    <button class="cat-btn active" onclick="filter('All')">All</button>
+</div>
+
+<div class="carousel-stage">
+    <button class="nav-btn prev" onclick="move(-1)">❮</button>
+    <div class="carousel" id="carousel">
+        <!-- Cards injected here -->
+    </div>
+    <button class="nav-btn next" onclick="move(1)">❯</button>
+</div>
+
+<footer>
+    <a href="/admin.html">Manage Coupons</a>
+</footer>
+
+<!-- Overlay -->
+<div class="overlay" id="overlay">
+    <div class="overlay-content">
+        <div class="card-category" id="ov-cat">RELAXATION</div>
+        <h2 id="ov-title" style="font-size: 3rem; margin: 20px 0; font-family: 'Cinzel'; color: white;">Title</h2>
+        <div id="ov-status" style="color: #aaa; margin-bottom: 20px;">Available</div>
+        <button class="btn-redeem" id="btn-redeem" onclick="redeemCurrent()">REDEEM NOW</button>
+        <div style="margin-top:30px; cursor:pointer; color:#777" onclick="closeOverlay()">Close</div>
+    </div>
+</div>
+
+<script>
+    let allCoupons = [];
+    let displayedCoupons = [];
+    let currentIndex = 0;
+    let definitions = {};
+    let categories = {};
+    let redeemed = {};
+
+    async function init() {
+        const res = await fetch('/api/data');
+        const data = await res.json();
+        definitions = data.definitions;
+        categories = data.categories || {};
+        redeemed = data.redeemed;
+
+        // Transform to array
+        allCoupons = Object.entries(definitions).map(([id, name]) => {
+            return {
+                id,
+                name,
+                category: categories[id] || 'General',
+                used: !!redeemed[id],
+                date: redeemed[id]
+            };
+        });
+
+        setupCategories();
+        filter('All');
+    }
+
+    function setupCategories() {
+        const cats = new Set(['All']);
+        allCoupons.forEach(c => cats.add(c.category));
+
+        const nav = document.getElementById('catNav');
+        nav.innerHTML = '';
+        cats.forEach(c => {
+            const btn = document.createElement('button');
+            btn.className = \`cat-btn \${c === 'All' ? 'active' : ''}\`;
+            btn.innerText = c;
+            btn.onclick = () => filter(c);
+            nav.appendChild(btn);
+        });
+    }
+
+    function filter(cat) {
+        // Update buttons
+        document.querySelectorAll('.cat-btn').forEach(b => {
+            b.classList.toggle('active', b.innerText === cat);
+        });
+
+        if (cat === 'All') {
+            displayedCoupons = allCoupons;
+        } else {
+            displayedCoupons = allCoupons.filter(c => c.category === cat);
+        }
+
+        currentIndex = 0;
+        renderCarousel();
+    }
+
+    function renderCarousel() {
+        const container = document.getElementById('carousel');
+        container.innerHTML = '';
+
+        displayedCoupons.forEach((item, index) => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.onclick = () => openOverlay(index);
+
+            const status = item.used ? '<span class="status-badge used">REDEEMED</span>' : '<span class="status-badge">AVAILABLE</span>';
+
+            card.innerHTML = \`
+                <div class="card-category">\${item.category}</div>
+                <div class="card-title">\${item.name}</div>
+                <div class="card-status">\${status}</div>
+            \`;
+
+            // Set initial 3D transform based on index relative to current
+            updateCardStyle(card, index, currentIndex);
+
+            container.appendChild(card);
+        });
+    }
+
+    function updateCardStyle(card, index, activeIndex) {
+        const offset = index - activeIndex;
+        const absOffset = Math.abs(offset);
+
+        if (absOffset > 2) {
+            card.style.display = 'none';
+        } else {
+            card.style.display = 'flex';
+            card.classList.toggle('active', offset === 0);
+
+            // 3D Logic
+            const translateZ = offset === 0 ? 0 : -100 - (absOffset * 50);
+            const translateX = offset * 60; // 60% shift
+            const rotateY = offset * -5;
+            const opacity = offset === 0 ? 1 : 0.5 - (absOffset * 0.1);
+
+            card.style.transform = \`translateX(\${translateX}%) translateZ(\${translateZ}px) rotateY(\${rotateY}deg)\`;
+            card.style.opacity = opacity;
+            card.style.zIndex = 10 - absOffset;
+        }
+    }
+
+    function move(dir) {
+        const newIndex = currentIndex + dir;
+        if (newIndex >= 0 && newIndex < displayedCoupons.length) {
+            currentIndex = newIndex;
+            const cards = document.querySelectorAll('.card');
+            cards.forEach((card, idx) => updateCardStyle(card, idx, currentIndex));
+        }
+    }
+
+    function openOverlay(index) {
+        const item = displayedCoupons[index];
+        if (index !== currentIndex) {
+            currentIndex = index;
+            const cards = document.querySelectorAll('.card');
+            cards.forEach((card, idx) => updateCardStyle(card, idx, currentIndex));
+            return;
+        }
+
+        document.getElementById('ov-cat').innerText = item.category;
+        document.getElementById('ov-title').innerText = item.name;
+
+        const btn = document.getElementById('btn-redeem');
+        const status = document.getElementById('ov-status');
+
+        if (item.used) {
+            status.innerText = 'Redeemed on ' + item.date;
+            status.style.color = '#ff3333';
+            btn.style.display = 'none';
+        } else {
+            status.innerText = 'Available for use';
+            status.style.color = '#00ff00';
+            btn.style.display = 'block';
+            btn.onclick = () => redeemItem(item.id);
+        }
+
+        document.getElementById('overlay').style.display = 'flex';
+    }
+
+    function closeOverlay() {
+        document.getElementById('overlay').style.display = 'none';
+    }
+
+    async function redeemItem(code) {
+        if (!confirm("Are you sure?")) return;
+
+        try {
+            const res = await fetch('/api/redeem', {
+                method: 'POST',
+                body: JSON.stringify({ code })
+            });
+            if (res.ok) {
+                // Reload data to reflect change
+                await init();
+                closeOverlay();
+                alert("Redeemed Successfully!");
+            }
+        } catch(e) {
+            alert("Connection Error");
+        }
+    }
+
+    // Swipe support
+    let touchStartX = 0;
+    document.addEventListener('touchstart', e => touchStartX = e.changedTouches[0].screenX);
+    document.addEventListener('touchend', e => {
+        if (e.changedTouches[0].screenX < touchStartX - 50) move(1);
+        if (e.changedTouches[0].screenX > touchStartX + 50) move(-1);
+    });
+
+    init();
 </script>
 </body>
 </html>
@@ -1080,6 +1547,3 @@ echo "   coupons redeem ID -> Redeem manually"
 echo "   coupons reset     -> Reset all"
 echo ""
 echo "Merry Christmas! 🎄"
-INSTALL_EOF
-chmod +x install_coupons.sh
-./install_coupons.sh
