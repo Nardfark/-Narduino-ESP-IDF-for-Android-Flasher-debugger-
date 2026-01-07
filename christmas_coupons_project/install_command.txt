@@ -1,0 +1,531 @@
+cat << 'END_OF_COMMAND' > install_coupons.sh
+#!/bin/bash
+
+# ==================================================================================
+# 🎄 Jennifer's Upgraded Christmas Coupon Server (v4 - Clean Install Edition) 🎄
+# ==================================================================================
+
+APP_DIR="$HOME/christmas_coupons"
+PORT=6969
+USER=$(whoami)
+
+echo "🎅 Ho Ho Ho! Starting clean installation..."
+
+# --- 1. PRE-FLIGHT CHECKS & CLEANUP ---
+echo "🔄 Stopping existing service if running..."
+sudo systemctl stop coupon_server 2>/dev/null || true
+
+# Check Port
+if ss -tuln | grep -q ":$PORT "; then
+    echo "⚠️  WARNING: Port $PORT seems to be in use."
+    PID=$(lsof -t -i:$PORT)
+    if [ -n "$PID" ]; then
+        echo "🔪 Killing process $PID to free port..."
+        kill -9 $PID
+    fi
+fi
+
+# --- NUCLEAR OPTION: BACKUP & WIPE ---
+if [ -d "$APP_DIR" ]; then
+    BACKUP_NAME="${APP_DIR}_backup_$(date +%s)"
+    echo "📦 Backing up existing directory to $BACKUP_NAME..."
+    mv "$APP_DIR" "$BACKUP_NAME"
+    echo "🧹 Clean slate prepared."
+fi
+
+mkdir -p "$APP_DIR"
+cd "$APP_DIR"
+echo "📂 Created new directory: $APP_DIR"
+
+# --- 2. GENERATE FILES ---
+
+# 2.1 DATABASE GENERATOR (30 ITEMS)
+echo "🎲 Generating fresh database..."
+cat <<EOF > generate_db.py
+import json
+import random
+import string
+
+# Full list of 30 items
+new_items = [
+    {"name": "Back Scratching (5m)", "category": "Relaxation"},
+    {"name": "Back Scratching (5m)", "category": "Relaxation"},
+    {"name": "Foot Rub (15m)", "category": "Relaxation"},
+    {"name": "Foot Rub (15m)", "category": "Relaxation"},
+    {"name": "Back Massage (30m)", "category": "Relaxation"},
+    {"name": "Back Scratching (10m)", "category": "Relaxation"},
+    {"name": "Spa Day (Baby Watch)", "category": "Relaxation"},
+    {"name": "Sleep In", "category": "Relaxation"},
+    {"name": "24hr Mom Break", "category": "Relaxation"},
+    {"name": "Tech Free Hour", "category": "Quality Time"},
+    {"name": "Watch Movie (No Work)", "category": "Quality Time"},
+    {"name": "Trip to Lake", "category": "Adventure"},
+    {"name": "Go on a Hike", "category": "Adventure"},
+    {"name": "Do Dishes (All Day)", "category": "Chores"},
+    {"name": "Vacuum & Mop", "category": "Chores"},
+    {"name": "Do Laundry (All Day)", "category": "Chores"},
+    {"name": "Grocery Shopping", "category": "Chores"},
+    {"name": "Organize A Room", "category": "Chores"},
+    {"name": "Diaper Duty (All Day)", "category": "Chores"},
+    {"name": "Pay For Gas (Tank)", "category": "Gifts"},
+    {"name": "Personal Chauffeur", "category": "Service"},
+    {"name": "One 'Yes' Day", "category": "Special"},
+    {"name": "Wildcard #1", "category": "Special"},
+    {"name": "Wildcard #2", "category": "Special"},
+    {"name": "Breakfast in Bed", "category": "Food"},
+    {"name": "Dinner Choice", "category": "Food"},
+    {"name": "Ice Cream Date", "category": "Food"},
+    {"name": "Game Night", "category": "Quality Time"},
+    {"name": "Walk in the Park", "category": "Adventure"},
+    {"name": "Car Wash", "category": "Chores"}
+]
+
+def generate_id():
+    chars = string.ascii_uppercase + string.digits
+    p1 = ''.join(random.choices(chars, k=4))
+    p2 = ''.join(random.choices(chars, k=4))
+    return f"{p1}-{p2}"
+
+db = {"definitions": {}, "redeemed": {}, "categories": {}}
+
+# Generate new DB
+used_ids = set()
+for item in new_items:
+    while True:
+        new_id = generate_id()
+        if new_id not in used_ids:
+            used_ids.add(new_id)
+            db["definitions"][new_id] = item["name"]
+            db["categories"][new_id] = item["category"]
+            break
+
+with open('coupons.json', 'w') as f:
+    json.dump(db, f, indent=2)
+
+print(f"Generated {len(new_items)} coupons.")
+EOF
+
+python3 generate_db.py
+rm generate_db.py
+
+# 2.2 SERVER (server.py)
+cat <<EOF > server.py
+import http.server
+import socketserver
+import json
+import os
+import urllib.parse
+from datetime import datetime
+
+PORT = $PORT
+DB_FILE = 'coupons.json'
+
+class ThreadingSimpleServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    pass
+
+class CouponHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        # Serve API Data
+        if self.path == '/api/data':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            try:
+                with open(DB_FILE, 'r') as f:
+                    self.wfile.write(f.read().encode())
+            except Exception as e:
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+            return
+
+        # Rewrite root to index.html (User View)
+        if self.path == '/' or self.path.startswith('/?'):
+            self.path = '/index.html'
+
+        return http.server.SimpleHTTPRequestHandler.do_GET(self)
+
+    def do_POST(self):
+        # API: Redeem Coupon
+        if self.path == '/api/redeem':
+            try:
+                length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(length)
+                data = json.loads(post_data.decode())
+                code = data.get('code')
+
+                with open(DB_FILE, 'r+') as f:
+                    db = json.load(f)
+
+                    if code in db['definitions']:
+                        if code in db['redeemed']:
+                            self.send_response(409) # Conflict
+                            self.end_headers()
+                            response = {
+                                "status": "error",
+                                "message": "Already redeemed",
+                                "date": db['redeemed'][code],
+                                "item": db['definitions'][code]
+                            }
+                        else:
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            db['redeemed'][code] = timestamp
+                            f.seek(0)
+                            json.dump(db, f, indent=2)
+                            f.truncate()
+
+                            self.send_response(200)
+                            self.end_headers()
+                            response = {
+                                "status": "success",
+                                "message": "Redeemed successfully",
+                                "date": timestamp,
+                                "item": db['definitions'][code]
+                            }
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                        response = {"status": "error", "message": "Invalid Code"}
+
+                self.wfile.write(json.dumps(response).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
+            return
+
+print(f"Starting Christmas Coupon Server on port {PORT}...")
+socketserver.TCPServer.allow_reuse_address = True
+with ThreadingSimpleServer(("", PORT), CouponHandler) as httpd:
+    httpd.serve_forever()
+EOF
+
+# 2.3 FRONTEND (admin.html)
+cat <<EOF > admin.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coupons Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --primary: #5d001e;
+    --secondary: #2f4f4f;
+    --accent: #d4af37;
+    --bg: #fdfbf7;
+    --text: #333;
+    --card-bg: #fff;
+    --card-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Lato', sans-serif;
+    background-color: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 20px;
+  }
+  header { text-align: center; margin-bottom: 40px; padding-top: 20px; }
+  h1 { font-family: 'Playfair Display', serif; font-size: 3rem; color: var(--primary); margin-bottom: 10px; }
+  p.subtitle { color: var(--secondary); font-style: italic; font-size: 1.1rem; }
+  .stats-bar {
+    max-width: 600px; margin: 0 auto 40px auto; background: #fff;
+    border: 1px solid #e0e0e0; border-radius: 4px; padding: 15px 30px;
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: var(--card-shadow); color: var(--secondary); font-family: 'Playfair Display', serif;
+  }
+  .stats-val { font-weight: bold; color: var(--primary); margin-left: 5px; }
+  .container { max-width: 1000px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 25px; }
+  .card {
+    background: var(--card-bg); border-radius: 4px; overflow: hidden;
+    position: relative; box-shadow: var(--card-shadow); border: 1px solid #f0f0f0;
+  }
+  .card.redeemed { opacity: 0.6; background: #fafafa; }
+  .card-top { height: 6px; background: linear-gradient(90deg, var(--primary) 0%, var(--primary) 40%, var(--accent) 40%, var(--accent) 60%, var(--secondary) 60%, var(--secondary) 100%); }
+  .card-body { padding: 25px; text-align: center; }
+  .card-title { font-size: 1.3rem; font-weight: 700; margin-bottom: 5px; font-family: 'Playfair Display', serif; color: var(--text); }
+  .card-code { font-size: 0.75rem; color: #999; letter-spacing: 1px; margin-bottom: 20px; font-family: monospace; }
+  .btn {
+    display: inline-block; background: transparent; color: var(--primary);
+    padding: 8px 25px; border: 1px solid var(--primary); border-radius: 2px;
+    text-decoration: none; font-weight: bold; cursor: pointer; text-transform: uppercase;
+  }
+  .btn:hover { background: var(--primary); color: white; }
+  .btn.disabled { border-color: #ccc; color: #999; cursor: default; background: transparent; }
+  .stamp {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-15deg);
+    border: 3px double var(--primary); color: var(--primary); font-size: 1.4rem;
+    font-family: 'Courier New', Courier, monospace; font-weight: bold; padding: 5px 15px;
+    text-transform: uppercase; pointer-events: none; background: rgba(255,255,255,0.8);
+  }
+  footer { text-align: center; margin-top: 50px; font-size: 0.9rem; }
+  footer a { color: var(--secondary); text-decoration: none; border-bottom: 1px dotted var(--secondary); }
+</style>
+</head>
+<body>
+<div class="container">
+  <header><h1>Christmas Coupons</h1><p class="subtitle">Admin Dashboard</p></header>
+  <div class="stats-bar">
+    <span>Available <span id="count-avail" class="stats-val">0</span></span>
+    <span>Redeemed <span id="count-used" class="stats-val">0</span></span>
+  </div>
+  <div id="grid" class="grid"><div class="loading">Loading...</div></div>
+  <footer><a href="/print.html" target="_blank" class="btn">🖨️ Print Coupons</a></footer>
+</div>
+<script>
+    async function loadData() {
+        try {
+            const res = await fetch('/api/data');
+            const data = await res.json();
+            const items = Object.entries(data.definitions).map(([id, name]) => ({ id, name, date: data.redeemed[id] }));
+            items.sort((a, b) => (a.date ? 1 : 0) - (b.date ? 1 : 0));
+
+            document.getElementById('count-avail').innerText = Object.keys(data.definitions).length - Object.keys(data.redeemed).length;
+            document.getElementById('count-used').innerText = Object.keys(data.redeemed).length;
+
+            let html = '';
+            items.forEach(item => {
+                const isRedeemed = !!item.date;
+                const btn = isRedeemed ? '<div class="btn disabled">REDEEMED</div>' : \`<button class="btn" onclick="redeem('\${item.id}')">REDEEM</button>\`;
+                const stamp = isRedeemed ? '<div class="stamp">USED</div>' : '';
+                html += \`<div class="card \${isRedeemed ? 'redeemed' : ''}"><div class="card-top"></div><div class="card-body"><div class="card-title">\${item.name}</div><div class="card-code">\${item.id}</div>\${stamp}\${btn}</div></div>\`;
+            });
+            document.getElementById('grid').innerHTML = html;
+        } catch (e) { document.getElementById('grid').innerText = "Error"; }
+    }
+    async function redeem(code) {
+        if(!confirm("Redeem this coupon?")) return;
+        await fetch('/api/redeem', { method: 'POST', body: JSON.stringify({ code }) });
+        loadData();
+    }
+    window.addEventListener('DOMContentLoaded', loadData);
+</script>
+</body>
+</html>
+EOF
+
+# 2.3.5 USER FRONTEND (index.html) - 3D Carousel
+cat <<EOF > index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Christmas Coupons</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Montserrat:wght@300;400&display=swap" rel="stylesheet">
+<style>
+    :root { --bg-dark: #0a0f0d; --neon-gold: #ffd700; --glass: rgba(255, 255, 255, 0.05); }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg-dark); color: white; font-family: 'Montserrat', sans-serif; overflow-x: hidden; height: 100vh; display: flex; flex-direction: column; }
+    header { text-align: center; padding: 20px; background: linear-gradient(to bottom, black, transparent); }
+    h1 { font-family: 'Cinzel', serif; color: var(--neon-gold); text-shadow: 0 0 10px rgba(255, 215, 0, 0.5); font-size: 2rem; }
+    .category-nav { display: flex; overflow-x: auto; padding: 10px 20px; gap: 15px; background: rgba(0,0,0,0.3); }
+    .cat-btn { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #aaa; padding: 8px 16px; border-radius: 20px; cursor: pointer; white-space: nowrap; }
+    .cat-btn.active { border-color: var(--neon-gold); color: var(--neon-gold); background: rgba(255, 215, 0, 0.1); box-shadow: 0 0 15px rgba(255, 215, 0, 0.2); }
+    .carousel-stage { flex: 1; display: flex; align-items: center; justify-content: center; perspective: 1000px; overflow: hidden; position: relative; }
+    .carousel { position: relative; width: 300px; height: 450px; transform-style: preserve-3d; transition: transform 0.5s ease-out; }
+    .card { position: absolute; width: 100%; height: 100%; background: linear-gradient(135deg, #1a1a1a, #2a2a2a); border: 1px solid rgba(255,255,255,0.1); border-radius: 15px; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 10px 30px rgba(0,0,0,0.5); transition: all 0.5s ease-out; opacity: 0.5; backdrop-filter: blur(5px); }
+    .card.active { opacity: 1; box-shadow: 0 0 30px rgba(255, 215, 0, 0.2); border-color: var(--neon-gold); z-index: 10; }
+    .card-category { text-transform: uppercase; font-size: 0.8rem; letter-spacing: 2px; color: #888; }
+    .card-title { font-family: 'Cinzel', serif; font-size: 2rem; background: linear-gradient(45deg, #fff, #ccc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .status-badge { padding: 5px 10px; border-radius: 10px; background: rgba(0,255,0,0.1); color: #0f0; font-size: 0.9rem; align-self: flex-end; }
+    .status-badge.used { background: rgba(255,0,0,0.1); color: #f00; }
+    .nav-btn { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.1); border: none; color: white; font-size: 2rem; padding: 20px; cursor: pointer; z-index: 20; border-radius: 50%; }
+    .prev { left: 20px; } .next { right: 20px; }
+    .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100; display: none; align-items: center; justify-content: center; flex-direction: column; backdrop-filter: blur(10px); }
+    .btn-redeem { background: var(--neon-gold); color: black; border: none; padding: 15px 40px; font-size: 1.2rem; font-weight: bold; border-radius: 50px; cursor: pointer; margin-top: 30px; box-shadow: 0 0 20px rgba(255, 215, 0, 0.4); }
+    footer { text-align: center; padding: 20px; color: #555; }
+    footer a { color: #777; text-decoration: none; }
+</style>
+</head>
+<body>
+<header><h1>The Collection</h1></header>
+<div class="category-nav" id="catNav"><button class="cat-btn active" onclick="filter('All')">All</button></div>
+<div class="carousel-stage">
+    <button class="nav-btn prev" onclick="move(-1)">❮</button>
+    <div class="carousel" id="carousel"></div>
+    <button class="nav-btn next" onclick="move(1)">❯</button>
+</div>
+<footer><a href="/admin.html">Manage Coupons</a></footer>
+<div class="overlay" id="overlay">
+    <div style="text-align: center; max-width: 80%;">
+        <div class="card-category" id="ov-cat"></div>
+        <h2 id="ov-title" style="font-size: 3rem; margin: 20px 0; font-family: 'Cinzel'; color: white;"></h2>
+        <div id="ov-status" style="color: #aaa; margin-bottom: 20px;"></div>
+        <button class="btn-redeem" id="btn-redeem" onclick="redeemCurrent()">REDEEM NOW</button>
+        <div style="margin-top:30px; cursor:pointer; color:#777" onclick="document.getElementById('overlay').style.display='none'">Close</div>
+    </div>
+</div>
+<script>
+    let all=[], displayed=[], idx=0, defs={}, cats={}, red={};
+    async function init() {
+        const d = await (await fetch('/api/data')).json();
+        defs=d.definitions; cats=d.categories||{}; red=d.redeemed;
+        all = Object.entries(defs).map(([id, name]) => ({ id, name, category: cats[id]||'General', used: !!red[id], date: red[id] }));
+        const s = new Set(['All']); all.forEach(c=>s.add(c.category));
+        const nav = document.getElementById('catNav'); nav.innerHTML = '';
+        s.forEach(c => { const b=document.createElement('button'); b.className=\`cat-btn \${c==='All'?'active':''}\`; b.innerText=c; b.onclick=()=>filter(c); nav.appendChild(b); });
+        filter('All');
+    }
+    function filter(c) {
+        document.querySelectorAll('.cat-btn').forEach(b=>b.classList.toggle('active', b.innerText===c));
+        displayed = c==='All' ? all : all.filter(x=>x.category===c);
+        idx=0; render();
+    }
+    function render() {
+        const con = document.getElementById('carousel'); con.innerHTML = '';
+        displayed.forEach((item, i) => {
+            const c = document.createElement('div'); c.className='card'; c.onclick=()=>openOv(i);
+            const st = item.used ? '<span class="status-badge used">REDEEMED</span>' : '<span class="status-badge">AVAILABLE</span>';
+            c.innerHTML = \`<div class="card-category">\${item.category}</div><div class="card-title">\${item.name}</div><div class="card-status">\${st}</div>\`;
+            upd(c, i, idx); con.appendChild(c);
+        });
+    }
+    function upd(c, i, active) {
+        const off = i - active, abs = Math.abs(off);
+        if(abs>2) { c.style.display='none'; } else {
+            c.style.display='flex'; c.classList.toggle('active', off===0);
+            c.style.transform = \`translateX(\${off*60}%) translateZ(\${off===0?0:-100-(abs*50)}px) rotateY(\${off*-5}deg)\`;
+            c.style.opacity = off===0?1:0.5-(abs*0.1); c.style.zIndex=10-abs;
+        }
+    }
+    function move(d) { const n=idx+d; if(n>=0 && n<displayed.length) { idx=n; document.querySelectorAll('.card').forEach((c,i)=>upd(c,i,idx)); } }
+    function openOv(i) {
+        if(i!==idx) { idx=i; document.querySelectorAll('.card').forEach((c,x)=>upd(c,x,idx)); return; }
+        const it = displayed[i];
+        document.getElementById('ov-cat').innerText=it.category; document.getElementById('ov-title').innerText=it.name;
+        const b = document.getElementById('btn-redeem'), s = document.getElementById('ov-status');
+        if(it.used) { s.innerText='Redeemed on '+it.date; s.style.color='#ff3333'; b.style.display='none'; }
+        else { s.innerText='Available'; s.style.color='#0f0'; b.style.display='block'; b.onclick=()=>doRedeem(it.id); }
+        document.getElementById('overlay').style.display='flex';
+    }
+    async function doRedeem(c) {
+        if(!confirm("Sure?")) return;
+        if((await fetch('/api/redeem', { method:'POST', body:JSON.stringify({code:c}) })).ok) { alert("Done!"); await init(); document.getElementById('overlay').style.display='none'; }
+    }
+    let tx=0; document.addEventListener('touchstart', e=>tx=e.changedTouches[0].screenX);
+    document.addEventListener('touchend', e=>{ if(e.changedTouches[0].screenX<tx-50) move(1); if(e.changedTouches[0].screenX>tx+50) move(-1); });
+    init();
+</script>
+</body>
+</html>
+EOF
+
+# 2.4 QR PRINT PAGE (print.html)
+cat <<EOF > print.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Print Coupons</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lato:wght@400&display=swap" rel="stylesheet">
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Lato', sans-serif; background: #eee; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .screen-only { text-align: center; padding: 20px; }
+    h1 { font-family: 'Playfair Display', serif; color: #5d001e; margin-bottom: 10px; }
+    .print-btn { background: #5d001e; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+    @page { size: letter; margin: 0.5in; }
+    .page { width: 7.5in; height: 10in; margin: 0 auto 40px; display: grid; grid-template-columns: repeat(2, 3.5in); grid-auto-rows: 2in; background: white; page-break-after: always; }
+    .page-label { position: absolute; top: -30px; width: 100%; text-align: center; display: none; }
+    .coupon, .coupon-back { width: 3.5in; height: 2in; border: 1px dashed #ccc; padding: 10px; display: flex; align-items: center; position: relative; overflow: hidden; }
+    .coupon-back { flex-direction: column; justify-content: center; text-align: center; }
+    .coupon-info { flex: 1; padding-right: 10px; }
+    .coupon-title { font-size: 14pt; font-family: 'Playfair Display', serif; color: #5d001e; font-weight: bold; }
+    .coupon-code { font-family: monospace; font-size: 10pt; color: #555; background: #f5f5f5; padding: 2px 6px; border-radius: 4px; display: inline-block; margin-top: 5px; }
+    .coupon-qr { width: 90px; height: 90px; flex-shrink: 0; } .coupon-qr img { width: 100%; }
+    .decoration { position: absolute; top: -10px; right: -10px; font-size: 3rem; color: rgba(212, 175, 55, 0.1); }
+    .back-title { font-family: 'Playfair Display', serif; font-size: 14pt; color: #5d001e; font-weight: bold; }
+    .back-desc { font-size: 10pt; color: #555; margin: 5px 0 15px; }
+    .back-serial { font-family: monospace; font-size: 8pt; color: #999; position: absolute; bottom: 10px; right: 10px; }
+    @media print { body { background: white; margin: 0; } .screen-only { display: none; } .page { margin: 0; box-shadow: none; } }
+</style>
+</head>
+<body>
+<div class="screen-only">
+    <h1>Printable Coupons (Double-Sided)</h1>
+    <p>Layout: 2"x3.5" Business Cards. Print double-sided (flip on long edge).</p>
+    <button class="print-btn" onclick="window.print()">🖨️ Print</button>
+</div>
+<div id="content">Loading...</div>
+<script>
+    async function load() {
+        const d = await (await fetch('/api/data')).json();
+        const items = Object.entries(d.definitions);
+        const con = document.getElementById('content'); con.innerHTML = '';
+        const base = window.location.protocol + '//' + window.location.host + '/redeem.html?code=';
+
+        for (let i = 0; i < items.length; i += 10) {
+            const chunk = items.slice(i, i + 10);
+
+            // Front
+            const f = document.createElement('div'); f.className = 'page';
+            chunk.forEach(([c, n]) => {
+                f.innerHTML += \`<div class="coupon"><div class="decoration">❄</div><div class="coupon-info"><div class="coupon-title" contenteditable="true">\${n}</div><div class="coupon-code">\${c}</div></div><div class="coupon-qr"><img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=\${encodeURIComponent(base+c)}"></div></div>\`;
+            });
+            con.appendChild(f);
+
+            // Back (Mirrored)
+            const b = document.createElement('div'); b.className = 'page';
+            for (let r = 0; r < 5; r++) {
+                const i1 = chunk[r*2], i2 = chunk[r*2+1];
+                if (!i1 && !i2) break;
+                b.appendChild(mkBack(i2)); // Right (on front) becomes Left (on back)
+                b.appendChild(mkBack(i1));
+            }
+            con.appendChild(b);
+        }
+    }
+    function mkBack(i) {
+        const d = document.createElement('div'); d.className = 'coupon-back';
+        if(i) d.innerHTML = \`<div class="back-title" contenteditable="true">\${i[1]}</div><div class="back-desc" contenteditable="true">Valid for one use. Merry Christmas!</div><div class="back-serial">Serial: \${i[0]}</div>\`;
+        else d.style.border = 'none';
+        return d;
+    }
+    load();
+</script>
+</body>
+</html>
+EOF
+
+# --- 3. CREATE SYSTEMD SERVICE ---
+echo "⚙️  Configuring Systemd..."
+sudo tee /etc/systemd/system/coupon_server.service > /dev/null <<EOF
+[Unit]
+Description=Christmas Coupon Server
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$APP_DIR
+ExecStart=/usr/bin/python3 $APP_DIR/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# --- 4. FINALIZATION ---
+echo "🚀 Starting Service..."
+sudo systemctl daemon-reload
+sudo systemctl enable coupon_server
+sudo systemctl restart coupon_server
+
+# Add alias
+if ! grep -q "alias coupons=" ~/.bashrc; then
+    echo "alias coupons='cd $APP_DIR && python3 server.py'" >> ~/.bashrc
+fi
+
+IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo "===================================================="
+echo "✅  INSTALLATION COMPLETE!"
+echo "===================================================="
+echo "🌐 User App (Carousel):  http://$IP:$PORT/index.html"
+echo "🔧 Admin/Print:          http://$IP:$PORT/admin.html"
+echo "===================================================="
+END_OF_COMMAND
+chmod +x install_coupons.sh
